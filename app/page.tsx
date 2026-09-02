@@ -378,6 +378,7 @@ export default function Home() {
   const [screen, setScreen] = useState<Screen>('home');
   const [selectedTrack, setSelectedTrack] = useState<Track>(tracks[0]);
   const [joinOpen, setJoinOpen] = useState(false);
+  const activeTab = screenLabels.findIndex((item) => item.id === screen);
 
   useEffect(() => {
     const context = (document as Document & { modelContext?: ModelContext }).modelContext;
@@ -415,30 +416,8 @@ export default function Home() {
 
   return (
     <main className="site-shell">
-      <div className="ambient ambient-one" />
-      <div className="ambient ambient-two" />
-      <div className="ambient ambient-three" />
-
-      <aside className="prototype-panel liquid-card">
-        <div>
-          <Logo />
-          <span className="prototype-tag">APP TEMPLATES · V1</span>
-        </div>
-        <h2>Listening feels<br />better <span>together.</span></h2>
-        <p>A liquid-glass mobile experience for sharing local music in perfect sync.</p>
-        <nav aria-label="Choose template screen">
-          {screenLabels.map(({ id, label, icon: Icon }, index) => (
-            <button key={id} className={screen === id ? 'active' : ''} onClick={() => setScreen(id)}>
-              <span>0{index + 1}</span><Icon />{label}<ChevronRight />
-            </button>
-          ))}
-        </nav>
-        <div className="design-note"><Sparkles /><span><strong>Liquid glass system</strong><small>Refractive layers · soft depth · luminous color</small></span></div>
-      </aside>
-
       <div className="phone-stage">
         <div className="phone-frame">
-          <div className="phone-glint" />
           <div className="dynamic-island" aria-hidden="true" />
           <div className="phone-screen">
             {screen === 'home' && <HomeScreen goTo={setScreen} openJoin={() => setJoinOpen(true)} />}
@@ -446,15 +425,22 @@ export default function Home() {
             {screen === 'create' && <CreateScreen goTo={setScreen} track={selectedTrack} />}
             {screen === 'room' && <RoomScreen goTo={setScreen} />}
           </div>
+          <nav className="nav-dock" aria-label="App navigation">
+            <div className="ios-tabbar">
+              <span className="tab-slider" style={{ transform: `translateX(${activeTab * 100}%)` }} />
+              {screenLabels.map(({ id, label, icon: Icon }) => (
+                <button key={id} className={screen === id ? 'active' : ''} onClick={() => setScreen(id)} aria-label={label}>
+                  <Icon />
+                  <span>{label === 'Live room' ? 'Live' : label}</span>
+                </button>
+              ))}
+            </div>
+            <button className="dock-search" onClick={() => setScreen('library')} aria-label="Search songs">
+              <Search />
+            </button>
+          </nav>
         </div>
-        <div className="screen-caption"><span>0{screenLabels.findIndex((item) => item.id === screen) + 1}</span><p>{screenLabels.find((item) => item.id === screen)?.label} template</p></div>
       </div>
-
-      <nav className="mobile-template-nav liquid-card" aria-label="Choose template screen">
-        {screenLabels.map(({ id, label, icon: Icon }) => (
-          <button key={id} className={screen === id ? 'active' : ''} onClick={() => setScreen(id)} aria-label={label}><Icon /><span>{label}</span></button>
-        ))}
-      </nav>
 
       {joinOpen && <JoinOverlay close={() => setJoinOpen(false)} join={() => { setJoinOpen(false); setScreen('room'); }} />}
     </main>
