@@ -90,6 +90,19 @@ type Reaction = { id: number; memberName: string; emoji: string; createdAt: numb
 type RoomTrack = { id: string; name: string; type: string; size: number; duration: number; position: number };
 type RoomPayload = { room: RoomState; tracks: RoomTrack[]; members: Member[]; reactions: Reaction[] };
 type InviteStatus = 'idle' | 'copied' | 'shared';
+type LocalPlayerController = {
+  activeIndex: number;
+  isPlaying: boolean;
+  position: number;
+  duration: number;
+  expanded: boolean;
+  open: (index: number) => void;
+  close: () => void;
+  toggle: () => void;
+  seek: (value: number) => void;
+  previous: () => void;
+  next: () => void;
+};
 type ApiResult = { error?: string };
 type UploadSessionResult = ApiResult & { trackId?: string; uploadId?: string };
 type UploadPartResult = ApiResult & { partNumber?: number; etag?: string };
@@ -399,10 +412,52 @@ function HomeScreen({ session, user, goTo, openJoin, openAccount }: { session: S
   );
 }
 
-function LibraryScreen({ selected, goTo, chooseFiles, error }: { selected: SelectedTrack[]; goTo: (screen: Screen) => void; chooseFiles: (files: File[]) => void; error: string }) {
+function LibraryScreen({ selected, goTo, chooseFiles, error, player }: { selected: SelectedTrack[]; goTo: (screen: Screen) => void; chooseFiles: (files: File[]) => void; error: string; player: LocalPlayerController }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const totalDuration = selected.reduce((sum, track) => sum + track.duration, 0);
   const totalSize = selected.reduce((sum, track) => sum + track.file.size, 0);
+  const activeTrack = selected[player.activeIndex] ?? selected[0];
+
+  if (player.expanded && activeTrack) {
+    const duration = player.duration || activeTrack.duration;
+    return (
+      <section className="screen library-screen local-player-screen" aria-labelledby="local-player-title">
+        <div className="sub-header">
+          <button className="icon-button" onClick={player.close} aria-label="Back to local music"><ArrowLeft /></button>
+          <span>Playing from this device</span><span className="header-spacer" />
+        </div>
+
+        <div className="local-player-art"><Artwork size="lg" /><span className="glass-badge"><Music2 size={14} /> Local playback</span></div>
+        <div className="track-title-row local-player-title">
+          <div><p id="local-player-title">{activeTrack.title}</p><span>{player.activeIndex + 1} of {selected.length} · HearU local</span></div>
+          <span className="room-role">On device</span>
+        </div>
+
+        <input className="local-seek" type="range" min={0} max={Math.max(duration, 1)} step={0.1} value={Math.min(player.position, Math.max(duration, 1))} onChange={(event) => player.seek(Number(event.target.value))} aria-label="Song position" />
+        <div className="time-row"><span>{formatTime(player.position)}</span><span>-{formatTime(Math.max(0, duration - player.position))}</span></div>
+
+        <div className="player-controls local-player-controls">
+          <button className="icon-button" disabled={player.activeIndex === 0} onClick={player.previous} aria-label="Previous song"><SkipBack fill="currentColor" /></button>
+          <button className="play-button" onClick={player.toggle} aria-label={player.isPlaying ? 'Pause' : 'Play'}>{player.isPlaying ? <Pause fill="currentColor" /> : <Play fill="currentColor" className="play-offset" />}</button>
+          <button className="icon-button" disabled={player.activeIndex >= selected.length - 1} onClick={player.next} aria-label="Next song"><SkipForward fill="currentColor" /></button>
+        </div>
+        <p className="local-device-note"><ShieldCheck /> Playing directly from your device. Nothing is uploaded.</p>
+
+        <div className="queue-heading"><span><Music2 /> Local queue</span><small>{selected.length} {selected.length === 1 ? 'song' : 'songs'}</small></div>
+        <div className="room-queue local-queue liquid-card" aria-label="Local music queue">
+          {selected.map((track, index) => {
+            const active = index === player.activeIndex;
+            return <button key={track.id} className={active ? 'queue-track active' : 'queue-track'} onClick={() => player.open(index)}>
+              <span className="queue-number">{active ? <AudioLines /> : index + 1}</span>
+              <span><strong>{track.title}</strong><small>{active ? 'Now playing' : `Song ${index + 1}`}</small></span>
+              <time>{formatTime(track.duration)}</time>
+            </button>;
+          })}
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section className="screen library-screen" aria-labelledby="library-title">
       <div className="sub-header">
@@ -429,15 +484,18 @@ function LibraryScreen({ selected, goTo, chooseFiles, error }: { selected: Selec
       {selected.length ? (
         <div className="selected-preview">
           <div className="section-heading"><div><Check size={15} /><span>{selected.length} of 250 selected</span></div></div>
-          <div className="liquid-card selected-track selection-summary">
+          <button className="liquid-card selected-track selection-summary local-summary" onClick={() => player.open(player.activeIndex)}>
             <Artwork size="md" />
             <div><small>PLAYLIST READY</small><strong>{selected.length} {selected.length === 1 ? 'song' : 'songs'}</strong><span>{formatTime(totalDuration)} · {(totalSize / 1024 / 1024).toFixed(1)} MB total</span></div>
+            <span className="local-summary-play"><Play fill="currentColor" /></span>
+          </button>
+          <div className="liquid-card selection-list local-library-list" aria-label="Selected songs">
+            {selected.map((track, index) => <button className={index === player.activeIndex ? 'selection-row local-track-row active' : 'selection-row local-track-row'} key={track.id} onClick={() => player.open(index)}><span>{index + 1}</span><strong>{track.title}</strong><small>{formatTime(track.duration)}</small></button>)}
           </div>
-          <div className="liquid-card selection-list" aria-label="Selected songs">
-            {selected.slice(0, 5).map((track, index) => <div className="selection-row" key={track.id}><span>{index + 1}</span><strong>{track.title}</strong><small>{formatTime(track.duration)}</small></div>)}
-            {selected.length > 5 && <div className="selection-more">+ {selected.length - 5} more songs</div>}
+          <div className="library-actions">
+            <Button className="local-play-button" onClick={() => player.open(player.activeIndex)}><Play fill="currentColor" /> Play locally</Button>
+            <Button className="create-button" onClick={() => goTo('create')}>Create room <ChevronRight /></Button>
           </div>
-          <Button className="create-button" onClick={() => goTo('create')}>Use this playlist <ChevronRight /></Button>
         </div>
       ) : (
         <div className="empty-music"><Music2 /><strong>No songs selected</strong><p>Choose one song or a playlist of up to 250 songs.</p></div>
@@ -624,12 +682,20 @@ export default function Home() {
   const [volume, setVolume] = useState(72);
   const [needsGesture, setNeedsGesture] = useState(false);
   const [inviteStatus, setInviteStatus] = useState<InviteStatus>('idle');
+  const [localTrackIndex, setLocalTrackIndex] = useState(0);
+  const [localIsPlaying, setLocalIsPlaying] = useState(false);
+  const [localPosition, setLocalPosition] = useState(0);
+  const [localDuration, setLocalDuration] = useState(0);
+  const [localPlayerOpen, setLocalPlayerOpen] = useState(false);
+  const [localPlayRequest, setLocalPlayRequest] = useState(0);
   const [dragPosition, setDragPosition] = useState<number | null>(null);
   const dragMoved = useRef(false);
   const previewUrls = useRef<Set<string>>(new Set());
   const audioRef = useRef<HTMLAudioElement>(null);
+  const localAudioRef = useRef<HTMLAudioElement>(null);
   const activeTab = screenLabels.findIndex((item) => item.id === screen);
   const visibleTab = dragPosition === null ? activeTab : Math.round(dragPosition);
+  const localTrack = selected[localTrackIndex] ?? selected[0];
 
   useEffect(() => {
     const code = new URLSearchParams(window.location.search).get('room')?.trim().toUpperCase() ?? '';
@@ -640,9 +706,24 @@ export default function Home() {
   }, []);
 
   useEffect(() => () => {
+    localAudioRef.current?.pause();
     previewUrls.current.forEach((url) => URL.revokeObjectURL(url));
     previewUrls.current.clear();
   }, []);
+
+  useEffect(() => {
+    const audio = localAudioRef.current;
+    if (!audio || !localTrack || localPlayRequest === 0) return;
+    audioRef.current?.pause();
+    audio.load();
+    void audio.play().catch(() => setLocalIsPlaying(false));
+  }, [localPlayRequest, localTrack?.previewUrl]);
+
+  useEffect(() => {
+    if (screen !== 'room') return;
+    localAudioRef.current?.pause();
+    setLocalIsPlaying(false);
+  }, [screen]);
 
   useEffect(() => {
     let active = true;
@@ -742,6 +823,16 @@ export default function Home() {
     });
     if (!supported.length) { setError('Choose audio files smaller than 70 MB each.'); return; }
 
+    const localAudio = localAudioRef.current;
+    localAudio?.pause();
+    localAudio?.removeAttribute('src');
+    localAudio?.load();
+    setLocalTrackIndex(0);
+    setLocalIsPlaying(false);
+    setLocalPosition(0);
+    setLocalDuration(0);
+    setLocalPlayerOpen(false);
+    setLocalPlayRequest(0);
     previewUrls.current.forEach((url) => URL.revokeObjectURL(url));
     previewUrls.current.clear();
     const tracks = supported.map((file) => {
@@ -761,8 +852,64 @@ export default function Home() {
     });
   }
 
+  function openLocalTrack(index: number) {
+    if (!selected[index]) return;
+    setLocalPlayerOpen(true);
+    audioRef.current?.pause();
+    if (index === localTrackIndex) {
+      const audio = localAudioRef.current;
+      if (audio) void audio.play().catch(() => setLocalIsPlaying(false));
+      return;
+    }
+    setLocalTrackIndex(index);
+    setLocalPosition(0);
+    setLocalDuration(selected[index].duration);
+    setLocalPlayRequest((value) => value + 1);
+  }
+
+  function toggleLocalPlayback() {
+    const audio = localAudioRef.current;
+    if (!audio || !localTrack) return;
+    if (audio.paused) {
+      audioRef.current?.pause();
+      void audio.play().catch(() => setLocalIsPlaying(false));
+    } else {
+      audio.pause();
+    }
+  }
+
+  function seekLocalPlayback(value: number) {
+    const audio = localAudioRef.current;
+    if (!audio) return;
+    audio.currentTime = value;
+    setLocalPosition(value);
+  }
+
+  function previousLocalTrack() {
+    const audio = localAudioRef.current;
+    if (audio && audio.currentTime > 3) {
+      seekLocalPlayback(0);
+      return;
+    }
+    openLocalTrack(Math.max(0, localTrackIndex - 1));
+  }
+
+  function nextLocalTrack() {
+    openLocalTrack(Math.min(selected.length - 1, localTrackIndex + 1));
+  }
+
+  function finishLocalTrack() {
+    if (localTrackIndex < selected.length - 1) openLocalTrack(localTrackIndex + 1);
+    else {
+      if (localAudioRef.current) localAudioRef.current.currentTime = 0;
+      setLocalIsPlaying(false);
+      setLocalPosition(0);
+    }
+  }
+
   async function createRoom(settings: { roomName: string; displayName: string; hostOnly: boolean; reactionsEnabled: boolean }) {
     if (!selected.length) { setScreen('library'); return; }
+    localAudioRef.current?.pause();
     setBusy(true); setError('');
     setUploadProgress({ done: 0, total: selected.length });
     try {
@@ -798,9 +945,12 @@ export default function Home() {
       }
       await Promise.all(Array.from({ length: Math.min(4, selected.length - 1) }, () => uploadWorker()));
 
+      localAudioRef.current?.removeAttribute('src');
+      localAudioRef.current?.load();
       previewUrls.current.forEach((url) => URL.revokeObjectURL(url));
       previewUrls.current.clear();
       setSelected([]);
+      setLocalPlayerOpen(false); setLocalTrackIndex(0); setLocalPosition(0); setLocalDuration(0); setLocalIsPlaying(false); setLocalPlayRequest(0);
       setRoomNotice(failed ? `${failed} ${failed === 1 ? 'song' : 'songs'} could not be uploaded. The rest are ready.` : '');
       setInviteCode(next.code); setSession(next); setScreen('room');
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Room creation failed.'); }
@@ -821,10 +971,16 @@ export default function Home() {
 
   async function signOut() {
     audioRef.current?.pause();
+    localAudioRef.current?.pause();
+    localAudioRef.current?.removeAttribute('src');
+    localAudioRef.current?.load();
+    previewUrls.current.forEach((url) => URL.revokeObjectURL(url));
+    previewUrls.current.clear();
     await fetch('/api/auth/me', { method: 'DELETE' }).catch(() => undefined);
     sessionStorage.removeItem('hearu-session');
     window.history.replaceState(null, '', window.location.pathname);
     setInviteCode(''); setRoomNotice(''); setSession(null); setPayload(null); setSelected([]); setAccountOpen(false); setScreen('home'); setAuthUser(null);
+    setLocalPlayerOpen(false); setLocalTrackIndex(0); setLocalPosition(0); setLocalDuration(0); setLocalIsPlaying(false); setLocalPlayRequest(0);
   }
 
   async function updatePlayback(isPlaying: boolean, nextPosition: number, trackId?: string) {
@@ -936,10 +1092,34 @@ export default function Home() {
       <div className="phone-stage"><div className="phone-frame"><div className="dynamic-island" aria-hidden="true" />
         <div className="phone-screen">
           {screen === 'home' && <HomeScreen session={session} user={authUser} goTo={setScreen} openJoin={() => setJoinOpen(true)} openAccount={() => setAccountOpen(true)} />}
-          {screen === 'library' && <LibraryScreen selected={selected} goTo={setScreen} chooseFiles={chooseFiles} error={error} />}
+          {screen === 'library' && <LibraryScreen selected={selected} goTo={setScreen} chooseFiles={chooseFiles} error={error} player={{
+            activeIndex: localTrackIndex,
+            isPlaying: localIsPlaying,
+            position: localPosition,
+            duration: localDuration || localTrack?.duration || 0,
+            expanded: localPlayerOpen,
+            open: openLocalTrack,
+            close: () => setLocalPlayerOpen(false),
+            toggle: toggleLocalPlayback,
+            seek: seekLocalPlayback,
+            previous: previousLocalTrack,
+            next: nextLocalTrack,
+          }} />}
           {screen === 'create' && <CreateScreen selected={selected} defaultName={authUser.name.split(' ')[0]} goTo={setScreen} create={createRoom} busy={busy} error={error} uploadProgress={uploadProgress} />}
           {screen === 'room' && <RoomScreen session={session} payload={payload} audioRef={audioRef} position={position} volume={volume} needsGesture={needsGesture} inviteStatus={inviteStatus} notice={roomNotice} onLeave={leaveRoom} onToggle={togglePlayback} onSeek={seek} onVolume={setAudioVolume} onCopyInvite={() => { void copyInvite(); }} onShareInvite={() => { void shareInvite(); }} onSelectTrack={(trackId) => { void selectRoomTrack(trackId); }} onEnded={() => { void handleTrackEnded(); }} onReact={react} onSync={() => payload && void syncAudio(payload.room, true)} />}
         </div>
+        <audio
+          ref={localAudioRef}
+          className="sr-only"
+          src={localTrack?.previewUrl}
+          preload="metadata"
+          onTimeUpdate={(event) => setLocalPosition(event.currentTarget.currentTime)}
+          onLoadedMetadata={(event) => setLocalDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
+          onDurationChange={(event) => setLocalDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
+          onPlay={() => setLocalIsPlaying(true)}
+          onPause={() => setLocalIsPlaying(false)}
+          onEnded={finishLocalTrack}
+        />
         <nav className="nav-dock" aria-label="App navigation"><div className={`ios-tabbar ${dragPosition !== null ? 'dragging' : ''}`} onPointerDown={startDragging} onPointerMove={moveLens} onPointerUp={finishDragging} onPointerCancel={() => setDragPosition(null)}>
           <span className="tab-slider" style={{ transform: `translateX(${(dragPosition ?? activeTab) * 100}%)` }} />
           {screenLabels.map(({ id, label, icon: Icon }, index) => <button key={id} className={visibleTab === index ? 'active' : ''} onClick={(event) => { if (dragMoved.current) { event.preventDefault(); return; } if (id === 'room' && !session) setJoinOpen(true); else setScreen(id); }} onKeyDown={() => { dragMoved.current = false; }} aria-label={label}><Icon /><span>{label}</span></button>)}
