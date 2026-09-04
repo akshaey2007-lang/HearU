@@ -8,6 +8,7 @@ export type RoomRecord = {
   track_name: string;
   track_type: string;
   track_size: number;
+  current_track_id: string | null;
   duration: number;
   is_playing: number;
   position: number;
@@ -17,6 +18,18 @@ export type RoomRecord = {
   reactions_enabled: number;
   created_at: number;
   expires_at: number;
+};
+
+export type TrackRecord = {
+  id: string;
+  room_code: string;
+  storage_key: string;
+  name: string;
+  type: string;
+  size: number;
+  duration: number;
+  position: number;
+  created_at: number;
 };
 
 export type MemberRecord = {
@@ -45,6 +58,7 @@ type MemoryState = {
   rooms: Map<string, RoomRecord>;
   members: Map<string, MemberRecord>;
   reactions: ReactionRecord[];
+  tracks: Map<string, TrackRecord>;
   audio: Map<string, StoredAudio>;
   reactionId: number;
 };
@@ -61,9 +75,11 @@ function memory(): MemoryState {
     rooms: new Map(),
     members: new Map(),
     reactions: [],
+    tracks: new Map(),
     audio: new Map(),
     reactionId: 0,
   };
+  root[memoryKey].tracks ??= new Map();
   return root[memoryKey];
 }
 
@@ -75,7 +91,25 @@ function memberKey(roomCode: string, memberId: string) {
   return `${roomCode}:${memberId}`;
 }
 
-export async function createRoom(room: RoomRecord, host: MemberRecord) {
+function trackKey(roomCode: string, trackId: string) {
+  return `${roomCode}:${trackId}`;
+}
+
+function legacyTrack(room: RoomRecord): TrackRecord {
+  return {
+    id: 'legacy',
+    room_code: room.code,
+    storage_key: room.track_key,
+    name: room.track_name,
+    type: room.track_type,
+    size: room.track_size,
+    duration: room.duration,
+    position: 0,
+    created_at: room.created_at,
+  };
+}
+
+export async function createRoom(room: RoomRecord, host: MemberRecord, track: TrackRecord) {
   const db = bindings().DB;
   try {
     if (!db) throw new Error('DB binding unavailable');
@@ -83,24 +117,29 @@ export async function createRoom(room: RoomRecord, host: MemberRecord) {
       db.prepare(`
         INSERT INTO rooms (
           code, name, host_token, track_key, track_name, track_type, track_size,
-          duration, is_playing, position, position_updated_at, version,
-          host_only, reactions_enabled, created_at, expires_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          current_track_id, duration, is_playing, position, position_updated_at,
+          version, host_only, reactions_enabled, created_at, expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).bind(
         room.code, room.name, room.host_token, room.track_key, room.track_name,
-        room.track_type, room.track_size, room.duration, room.is_playing,
-        room.position, room.position_updated_at, room.version, room.host_only,
-        room.reactions_enabled, room.created_at, room.expires_at,
+        room.track_type, room.track_size, room.current_track_id, room.duration,
+        room.is_playing, room.position, room.position_updated_at, room.version,
+        room.host_only, room.reactions_enabled, room.created_at, room.expires_at,
       ),
       db.prepare(`
         INSERT INTO members (room_code, id, display_name, is_host, last_seen)
         VALUES (?, ?, ?, ?, ?)
       `).bind(host.room_code, host.id, host.display_name, host.is_host, host.last_seen),
+      db.prepare(`
+        INSERT INTO tracks (id, room_code, storage_key, name, type, size, duration, position, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(track.id, track.room_code, track.storage_key, track.name, track.type, track.size, track.duration, track.position, track.created_at),
     ]);
   } catch (error) {
     if (!canUseLocalFallback()) throw error;
     memory().rooms.set(room.code, room);
     memory().members.set(memberKey(host.room_code, host.id), host);
+    memory().tracks.set(trackKey(track.room_code, track.id), track);
   }
 }
 
@@ -119,15 +158,60 @@ export async function roomExists(code: string) {
   return Boolean(await getRoom(code));
 }
 
-export async function updatePlayback(code: string, isPlaying: boolean, position: number, updatedAt: number) {
+export async function getRoomTracks(code: string): Promise<TrackRecord[]> {
+  const db = bindings().DB;
+  try {
+    if (!db) throw new Error('DB binding unavailable');
+    const result = await db.prepare(`
+      SELECT id, room_code, storage_key, name, type, size, duration, position, created_at
+      FROM tracks
+      WHERE room_code = ?
+      ORDER BY position ASC
+      LIMIT 250
+    `).bind(code).all<TrackRecord>();
+    if (result.results.length) return result.results;
+    const room = await getRoom(code);
+    return room ? [legacyTrack(room)] : [];
+  } catch (error) {
+    if (!canUseLocalFallback()) throw error;
+    const tracks = [...memory().tracks.values()]
+      .filter((track) => track.room_code === code)
+      .sort((a, b) => a.position - b.position);
+    if (tracks.length) return tracks;
+    const room = memory().rooms.get(code);
+    return room ? [legacyTrack(room)] : [];
+  }
+}
+
+export async function getRoomTrack(code: string, id?: string | null) {
+  const tracks = await getRoomTracks(code);
+  if (id) return tracks.find((track) => track.id === id) ?? null;
+  return tracks[0] ?? null;
+}
+
+export async function addTrack(track: TrackRecord) {
+  const db = bindings().DB;
+  try {
+    if (!db) throw new Error('DB binding unavailable');
+    await db.prepare(`
+      INSERT INTO tracks (id, room_code, storage_key, name, type, size, duration, position, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(track.id, track.room_code, track.storage_key, track.name, track.type, track.size, track.duration, track.position, track.created_at).run();
+  } catch (error) {
+    if (!canUseLocalFallback()) throw error;
+    memory().tracks.set(trackKey(track.room_code, track.id), track);
+  }
+}
+
+export async function updatePlayback(code: string, isPlaying: boolean, position: number, updatedAt: number, currentTrackId: string) {
   const db = bindings().DB;
   try {
     if (!db) throw new Error('DB binding unavailable');
     await db.prepare(`
       UPDATE rooms
-      SET is_playing = ?, position = ?, position_updated_at = ?, version = version + 1
+      SET is_playing = ?, position = ?, position_updated_at = ?, current_track_id = ?, version = version + 1
       WHERE code = ?
-    `).bind(isPlaying ? 1 : 0, position, updatedAt, code).run();
+    `).bind(isPlaying ? 1 : 0, position, updatedAt, currentTrackId, code).run();
   } catch (error) {
     if (!canUseLocalFallback()) throw error;
     const room = memory().rooms.get(code);
@@ -136,6 +220,7 @@ export async function updatePlayback(code: string, isPlaying: boolean, position:
       is_playing: isPlaying ? 1 : 0,
       position,
       position_updated_at: updatedAt,
+      current_track_id: currentTrackId,
       version: room.version + 1,
     });
   }

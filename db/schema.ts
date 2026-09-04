@@ -1,4 +1,4 @@
-import { index, integer, primaryKey, real, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
 export const rooms = sqliteTable('rooms', {
   code: text('code').primaryKey(),
@@ -8,6 +8,7 @@ export const rooms = sqliteTable('rooms', {
   trackName: text('track_name').notNull(),
   trackType: text('track_type').notNull(),
   trackSize: integer('track_size').notNull(),
+  currentTrackId: text('current_track_id'),
   duration: real('duration').notNull().default(0),
   isPlaying: integer('is_playing', { mode: 'boolean' }).notNull().default(false),
   position: real('position').notNull().default(0),
@@ -18,6 +19,21 @@ export const rooms = sqliteTable('rooms', {
   createdAt: integer('created_at').notNull(),
   expiresAt: integer('expires_at').notNull(),
 }, (table) => [index('idx_rooms_expires_at').on(table.expiresAt)]);
+
+export const tracks = sqliteTable('tracks', {
+  id: text('id').primaryKey(),
+  roomCode: text('room_code').notNull().references(() => rooms.code, { onDelete: 'cascade' }),
+  storageKey: text('storage_key').notNull(),
+  name: text('name').notNull(),
+  type: text('type').notNull(),
+  size: integer('size').notNull(),
+  duration: real('duration').notNull().default(0),
+  position: integer('position').notNull(),
+  createdAt: integer('created_at').notNull(),
+}, (table) => [
+  uniqueIndex('idx_tracks_room_position').on(table.roomCode, table.position),
+  index('idx_tracks_room').on(table.roomCode),
+]);
 
 export const members = sqliteTable('members', {
   roomCode: text('room_code').notNull().references(() => rooms.code, { onDelete: 'cascade' }),

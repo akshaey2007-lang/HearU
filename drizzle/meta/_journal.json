@@ -15,6 +15,13 @@
       "when": 1788453504418,
       "tag": "0001_slow_morlun",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1788503093517,
+      "tag": "0002_real_wraith",
+      "breakpoints": true
     }
   ]
 }

@@ -53,6 +53,7 @@ declare global {
 }
 
 type SelectedTrack = {
+  id: string;
   file: File;
   title: string;
   duration: number;
@@ -70,6 +71,7 @@ type Session = {
 type RoomState = {
   code: string;
   name: string;
+  currentTrackId: string;
   trackName: string;
   trackType: string;
   trackSize: number;
@@ -85,7 +87,8 @@ type RoomState = {
 
 type Member = { id: string; displayName: string; isHost: boolean };
 type Reaction = { id: number; memberName: string; emoji: string; createdAt: number };
-type RoomPayload = { room: RoomState; members: Member[]; reactions: Reaction[] };
+type RoomTrack = { id: string; name: string; type: string; size: number; duration: number; position: number };
+type RoomPayload = { room: RoomState; tracks: RoomTrack[]; members: Member[]; reactions: Reaction[] };
 type InviteStatus = 'idle' | 'copied' | 'shared';
 
 type ModelContext = {
@@ -292,13 +295,13 @@ function HomeScreen({ session, user, goTo, openJoin, openAccount }: { session: S
       <div className="intro-copy">
         <p className="eyebrow"><Sparkles size={13} /> Your sound, together</p>
         <h1 id="home-title">Listen closer.<br /><span>Stay in sync.</span></h1>
-        <p>Share one song with everyone in the room.</p>
+        <p>Share a playlist of up to 250 songs with everyone in the room.</p>
       </div>
 
       <div className="action-grid">
         <button className="liquid-card action-card action-primary" onClick={() => goTo('library')}>
           <span className="action-icon"><Plus /></span>
-          <span><strong>Start a room</strong><small>Choose a song and invite friends</small></span>
+          <span><strong>Start a room</strong><small>Choose songs and invite friends</small></span>
           <ChevronRight className="action-arrow" />
         </button>
         <button className="liquid-card action-card" onClick={openJoin}>
@@ -323,7 +326,7 @@ function HomeScreen({ session, user, goTo, openJoin, openAccount }: { session: S
         </button>
       ) : (
         <div className="liquid-card how-card">
-          <span><Upload /><b>Import</b><small>Choose an audio file</small></span>
+          <span><Upload /><b>Import</b><small>Select up to 250 songs</small></span>
           <ChevronRight />
           <span><Share2 /><b>Invite</b><small>Send the room link</small></span>
           <ChevronRight />
@@ -336,8 +339,10 @@ function HomeScreen({ session, user, goTo, openJoin, openAccount }: { session: S
   );
 }
 
-function LibraryScreen({ selected, goTo, chooseFile, error }: { selected: SelectedTrack | null; goTo: (screen: Screen) => void; chooseFile: (file: File) => void; error: string }) {
+function LibraryScreen({ selected, goTo, chooseFiles, error }: { selected: SelectedTrack[]; goTo: (screen: Screen) => void; chooseFiles: (files: File[]) => void; error: string }) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const totalDuration = selected.reduce((sum, track) => sum + track.duration, 0);
+  const totalSize = selected.reduce((sum, track) => sum + track.file.size, 0);
   return (
     <section className="screen library-screen" aria-labelledby="library-title">
       <div className="sub-header">
@@ -346,52 +351,57 @@ function LibraryScreen({ selected, goTo, chooseFile, error }: { selected: Select
       </div>
       <div className="page-title">
         <p className="eyebrow"><FileAudio size={13} /> From this device</p>
-        <h1 id="library-title">Choose a<br /><span>song.</span></h1>
+        <h1 id="library-title">Choose your<br /><span>songs.</span></h1>
       </div>
 
-      <input ref={inputRef} className="sr-only" type="file" accept="audio/*,.mp3,.m4a,.wav,.flac,.ogg" onChange={(event) => {
-        const file = event.target.files?.[0];
-        if (file) chooseFile(file);
+      <input ref={inputRef} className="sr-only" type="file" multiple accept="audio/*,.mp3,.m4a,.wav,.flac,.ogg" onChange={(event) => {
+        const files = Array.from(event.target.files ?? []);
+        if (files.length) chooseFiles(files);
+        event.target.value = '';
       }} />
       <button className="liquid-card upload-zone" onClick={() => inputRef.current?.click()}>
         <span className="upload-icon"><Upload /></span>
-        <strong>{selected ? 'Choose a different song' : 'Import an audio file'}</strong>
-        <small>MP3, M4A, WAV, FLAC or OGG · up to 70 MB</small>
+        <strong>{selected.length ? 'Choose a different playlist' : 'Select songs from this device'}</strong>
+        <small>Up to 250 songs · 70 MB per file</small>
       </button>
       {error && <p className="form-error">{error}</p>}
 
-      {selected ? (
+      {selected.length ? (
         <div className="selected-preview">
-          <div className="section-heading"><div><Check size={15} /><span>Ready to share</span></div></div>
-          <div className="liquid-card selected-track">
+          <div className="section-heading"><div><Check size={15} /><span>{selected.length} of 250 selected</span></div></div>
+          <div className="liquid-card selected-track selection-summary">
             <Artwork size="md" />
-            <div><small>SELECTED SONG</small><strong>{selected.title}</strong><span>{formatTime(selected.duration)} · {(selected.file.size / 1024 / 1024).toFixed(1)} MB</span></div>
-            <audio src={selected.previewUrl} controls preload="metadata" />
+            <div><small>PLAYLIST READY</small><strong>{selected.length} {selected.length === 1 ? 'song' : 'songs'}</strong><span>{formatTime(totalDuration)} · {(totalSize / 1024 / 1024).toFixed(1)} MB total</span></div>
           </div>
-          <Button className="create-button" onClick={() => goTo('create')}>Use this song <ChevronRight /></Button>
+          <div className="liquid-card selection-list" aria-label="Selected songs">
+            {selected.slice(0, 5).map((track, index) => <div className="selection-row" key={track.id}><span>{index + 1}</span><strong>{track.title}</strong><small>{formatTime(track.duration)}</small></div>)}
+            {selected.length > 5 && <div className="selection-more">+ {selected.length - 5} more songs</div>}
+          </div>
+          <Button className="create-button" onClick={() => goTo('create')}>Use this playlist <ChevronRight /></Button>
         </div>
       ) : (
-        <div className="empty-music"><Music2 /><strong>No song selected</strong><p>Your browser keeps local files private until you choose one.</p></div>
+        <div className="empty-music"><Music2 /><strong>No songs selected</strong><p>Choose one song or a playlist of up to 250 songs.</p></div>
       )}
     </section>
   );
 }
 
-function CreateScreen({ selected, defaultName, goTo, create, busy, error }: {
-  selected: SelectedTrack | null;
+function CreateScreen({ selected, defaultName, goTo, create, busy, error, uploadProgress }: {
+  selected: SelectedTrack[];
   defaultName: string;
   goTo: (screen: Screen) => void;
   create: (settings: { roomName: string; displayName: string; hostOnly: boolean; reactionsEnabled: boolean }) => void;
   busy: boolean;
   error: string;
+  uploadProgress: { done: number; total: number } | null;
 }) {
   const [roomName, setRoomName] = useState('After Hours');
   const [displayName, setDisplayName] = useState(defaultName);
   const [hostOnly, setHostOnly] = useState(true);
   const [reactionsEnabled, setReactionsEnabled] = useState(true);
 
-  if (!selected) {
-    return <section className="screen centered-state"><FileAudio /><h2>Choose a song first</h2><Button onClick={() => goTo('library')}>Open music</Button></section>;
+  if (!selected.length) {
+    return <section className="screen centered-state"><FileAudio /><h2>Choose songs first</h2><Button onClick={() => goTo('library')}>Open music</Button></section>;
   }
 
   return (
@@ -404,7 +414,7 @@ function CreateScreen({ selected, defaultName, goTo, create, busy, error }: {
 
       <div className="liquid-card selected-track compact-track">
         <Artwork size="md" />
-        <div><small>PLAYING FIRST</small><strong>{selected.title}</strong><span>{formatTime(selected.duration)}</span></div>
+        <div><small>{selected.length} SONG PLAYLIST</small><strong>{selected[0].title}</strong><span>Plays first · {formatTime(selected[0].duration)}</span></div>
       </div>
 
       <div className="settings-card liquid-card">
@@ -415,15 +425,15 @@ function CreateScreen({ selected, defaultName, goTo, create, busy, error }: {
       </div>
 
       {error && <p className="form-error" role="alert">{error}</p>}
-      <div className="privacy-note"><ShieldCheck size={16} /><p><strong>Private by default.</strong> The uploaded song and room expire after six hours.</p></div>
+      <div className="privacy-note"><ShieldCheck size={16} /><p><strong>Temporary by design.</strong> Uploaded songs and the room expire after six hours.</p></div>
       <Button className="create-button" disabled={busy || !roomName.trim() || !displayName.trim()} onClick={() => create({ roomName, displayName, hostOnly, reactionsEnabled })}>
-        {busy ? <><Loader2 className="spin" /> Uploading song…</> : <><Radio /> Create listening room <ChevronRight /></>}
+        {busy ? <><Loader2 className="spin" /> {uploadProgress ? `Uploading ${uploadProgress.done} of ${uploadProgress.total} songs…` : 'Creating room…'}</> : <><Radio /> Create listening room <ChevronRight /></>}
       </Button>
     </section>
   );
 }
 
-function RoomScreen({ session, payload, audioRef, position, volume, needsGesture, inviteStatus, onLeave, onToggle, onSeek, onVolume, onCopyInvite, onShareInvite, onReact, onSync }: {
+function RoomScreen({ session, payload, audioRef, position, volume, needsGesture, inviteStatus, notice, onLeave, onToggle, onSeek, onVolume, onCopyInvite, onShareInvite, onSelectTrack, onEnded, onReact, onSync }: {
   session: Session | null;
   payload: RoomPayload | null;
   audioRef: RefObject<HTMLAudioElement | null>;
@@ -431,19 +441,23 @@ function RoomScreen({ session, payload, audioRef, position, volume, needsGesture
   volume: number;
   needsGesture: boolean;
   inviteStatus: InviteStatus;
+  notice: string;
   onLeave: () => void;
   onToggle: () => void;
   onSeek: (value: number) => void;
   onVolume: (value: number) => void;
   onCopyInvite: () => void;
   onShareInvite: () => void;
+  onSelectTrack: (trackId: string) => void;
+  onEnded: () => void;
   onReact: (emoji: string) => void;
   onSync: () => void;
 }) {
   if (!session || !payload) return <section className="screen centered-state"><Loader2 className="spin" /><h2>Connecting to room…</h2><button onClick={onLeave}>Cancel</button></section>;
-  const { room, members, reactions } = payload;
+  const { room, tracks, members, reactions } = payload;
   const canControl = session.role === 'host' || !room.hostOnly;
   const progress = room.duration ? Math.min(100, (position / room.duration) * 100) : 0;
+  const currentIndex = Math.max(0, tracks.findIndex((track) => track.id === room.currentTrackId));
 
   return (
     <section className="screen room-screen" aria-labelledby="room-title">
@@ -458,6 +472,7 @@ function RoomScreen({ session, payload, audioRef, position, volume, needsGesture
         <div><strong>{members.length} {members.length === 1 ? 'listener' : 'listeners'}</strong><small>{session.role === 'host' ? 'You are hosting' : `Joined as ${session.displayName}`}</small></div>
         <span className="sync-pill"><Check size={12} /> Synced</span>
       </div>
+      {notice && <p className="room-notice" role="status">{notice}</p>}
 
       <div className="now-playing">
         <div className="hero-art-wrap"><Artwork size="lg" /><span className="glass-badge"><AudioLines size={14} /> Listening together</span></div>
@@ -469,9 +484,9 @@ function RoomScreen({ session, payload, audioRef, position, volume, needsGesture
       <div className="time-row"><span>{formatTime(position)}</span><span>-{formatTime(Math.max(0, room.duration - position))}</span></div>
 
       <div className="player-controls">
-        <button className="icon-button" disabled={!canControl} onClick={() => onSeek(Math.max(0, position - 10))} aria-label="Back 10 seconds"><SkipBack fill="currentColor" /></button>
+        <button className="icon-button" disabled={!canControl || currentIndex === 0} onClick={() => onSelectTrack(tracks[currentIndex - 1].id)} aria-label="Previous song"><SkipBack fill="currentColor" /></button>
         <button className="play-button" disabled={!canControl} onClick={onToggle} aria-label={room.isPlaying ? 'Pause' : 'Play'}>{room.isPlaying ? <Pause fill="currentColor" /> : <Play fill="currentColor" className="play-offset" />}</button>
-        <button className="icon-button" disabled={!canControl} onClick={() => onSeek(Math.min(room.duration, position + 10))} aria-label="Forward 10 seconds"><SkipForward fill="currentColor" /></button>
+        <button className="icon-button" disabled={!canControl || currentIndex >= tracks.length - 1} onClick={() => onSelectTrack(tracks[currentIndex + 1].id)} aria-label="Next song"><SkipForward fill="currentColor" /></button>
       </div>
       {!canControl && <p className="host-control-note"><LockKeyhole /> The host controls playback</p>}
       {needsGesture && <button className="sync-audio-button" onClick={onSync}><Play /> Tap to hear synchronized audio</button>}
@@ -488,7 +503,18 @@ function RoomScreen({ session, payload, audioRef, position, volume, needsGesture
           {inviteStatus === 'copied' ? <><Check /> Copied</> : inviteStatus === 'shared' ? <><Check /> Shared</> : <><Copy /> Copy link</>}
         </span>
       </button>
-      <audio ref={audioRef} src={`/api/rooms/${room.code}/audio`} preload="auto" />
+      <div className="queue-heading"><span><Music2 /> Up next</span><small>{tracks.length} {tracks.length === 1 ? 'song' : 'songs'}</small></div>
+      <div className="room-queue liquid-card" aria-label="Room playlist">
+        {tracks.map((track, index) => {
+          const active = track.id === room.currentTrackId;
+          return <button key={track.id} className={active ? 'queue-track active' : 'queue-track'} disabled={!canControl && !active} onClick={() => !active && onSelectTrack(track.id)}>
+            <span className="queue-number">{active ? <AudioLines /> : index + 1}</span>
+            <span><strong>{track.name}</strong><small>{active ? 'Now playing' : `Song ${index + 1}`}</small></span>
+            <time>{formatTime(track.duration)}</time>
+          </button>;
+        })}
+      </div>
+      <audio ref={audioRef} src={`/api/rooms/${room.code}/audio?track=${encodeURIComponent(room.currentTrackId)}`} preload="auto" onLoadedMetadata={onSync} onEnded={() => canControl && onEnded()} />
     </section>
   );
 }
@@ -525,20 +551,22 @@ export default function Home() {
   const [authLoading, setAuthLoading] = useState(true);
   const [accountOpen, setAccountOpen] = useState(false);
   const [screen, setScreen] = useState<Screen>('home');
-  const [selected, setSelected] = useState<SelectedTrack | null>(null);
+  const [selected, setSelected] = useState<SelectedTrack[]>([]);
   const [session, setSession] = useState<Session | null>(null);
   const [payload, setPayload] = useState<RoomPayload | null>(null);
   const [joinOpen, setJoinOpen] = useState(false);
   const [inviteCode, setInviteCode] = useState('');
   const [busy, setBusy] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null);
   const [error, setError] = useState('');
+  const [roomNotice, setRoomNotice] = useState('');
   const [position, setPosition] = useState(0);
   const [volume, setVolume] = useState(72);
   const [needsGesture, setNeedsGesture] = useState(false);
   const [inviteStatus, setInviteStatus] = useState<InviteStatus>('idle');
   const [dragPosition, setDragPosition] = useState<number | null>(null);
   const dragMoved = useRef(false);
-  const previewUrl = useRef<string | null>(null);
+  const previewUrls = useRef<Set<string>>(new Set());
   const audioRef = useRef<HTMLAudioElement>(null);
   const activeTab = screenLabels.findIndex((item) => item.id === screen);
   const visibleTab = dragPosition === null ? activeTab : Math.round(dragPosition);
@@ -549,6 +577,11 @@ export default function Home() {
       setInviteCode(code);
       setJoinOpen(true);
     }
+  }, []);
+
+  useEffect(() => () => {
+    previewUrls.current.forEach((url) => URL.revokeObjectURL(url));
+    previewUrls.current.clear();
   }, []);
 
   useEffect(() => {
@@ -620,7 +653,7 @@ export default function Home() {
     const update = () => setPosition(audio.currentTime);
     audio.addEventListener('timeupdate', update);
     return () => audio.removeEventListener('timeupdate', update);
-  }, [payload?.room.code]);
+  }, [payload?.room.code, payload?.room.currentTrackId]);
 
   useEffect(() => {
     const context = (document as Document & { modelContext?: ModelContext }).modelContext;
@@ -641,23 +674,41 @@ export default function Home() {
     return () => lifecycle.abort();
   }, []);
 
-  function chooseFile(file: File) {
-    if (file.size > 70 * 1024 * 1024) { setError('Choose a file smaller than 70 MB.'); return; }
-    if (previewUrl.current) URL.revokeObjectURL(previewUrl.current);
-    const url = URL.createObjectURL(file); previewUrl.current = url;
-    const probe = new Audio(url);
-    const title = file.name.replace(/\.[^/.]+$/, '') || 'Untitled song';
-    const finish = (duration: number) => { setSelected({ file, title, duration: Number.isFinite(duration) ? duration : 0, previewUrl: url }); setError(''); };
-    probe.addEventListener('loadedmetadata', () => finish(probe.duration), { once: true });
-    probe.addEventListener('error', () => finish(0), { once: true });
+  function chooseFiles(files: File[]) {
+    const candidates = files.slice(0, 250);
+    const supported = candidates.filter((file) => {
+      const extensionOkay = /\.(mp3|m4a|wav|flac|ogg)$/i.test(file.name);
+      return file.size > 0 && file.size <= 70 * 1024 * 1024 && (!file.type || file.type.startsWith('audio/') || extensionOkay);
+    });
+    if (!supported.length) { setError('Choose audio files smaller than 70 MB each.'); return; }
+
+    previewUrls.current.forEach((url) => URL.revokeObjectURL(url));
+    previewUrls.current.clear();
+    const tracks = supported.map((file) => {
+      const previewUrl = URL.createObjectURL(file);
+      previewUrls.current.add(previewUrl);
+      return { id: crypto.randomUUID(), file, title: file.name.replace(/\.[^/.]+$/, '') || 'Untitled song', duration: 0, previewUrl };
+    });
+    setSelected(tracks);
+    const skipped = files.length - supported.length;
+    setError(skipped ? `${skipped} ${skipped === 1 ? 'file was' : 'files were'} skipped. HearU supports up to 250 audio files, 70 MB each.` : '');
+
+    tracks.forEach((track) => {
+      const probe = new Audio(track.previewUrl);
+      const finish = (duration: number) => setSelected((current) => current.map((item) => item.id === track.id ? { ...item, duration: Number.isFinite(duration) ? duration : 0 } : item));
+      probe.addEventListener('loadedmetadata', () => finish(probe.duration), { once: true });
+      probe.addEventListener('error', () => finish(0), { once: true });
+    });
   }
 
   async function createRoom(settings: { roomName: string; displayName: string; hostOnly: boolean; reactionsEnabled: boolean }) {
-    if (!selected) { setScreen('library'); return; }
+    if (!selected.length) { setScreen('library'); return; }
+    const firstTrack = selected[0];
     setBusy(true); setError('');
+    setUploadProgress({ done: 0, total: selected.length });
     try {
       const form = new FormData();
-      form.set('audio', selected.file); form.set('trackName', selected.title); form.set('duration', String(selected.duration));
+      form.set('audio', firstTrack.file); form.set('trackName', firstTrack.title); form.set('duration', String(firstTrack.duration));
       form.set('roomName', settings.roomName); form.set('displayName', settings.displayName);
       form.set('hostOnly', String(settings.hostOnly)); form.set('reactionsEnabled', String(settings.reactionsEnabled));
       const response = await fetch('/api/rooms', { method: 'POST', body: form });
@@ -666,9 +717,44 @@ export default function Home() {
       const next: Session = { code: result.room.code, role: 'host', hostToken: result.hostToken, memberId: result.memberId, displayName: result.displayName || settings.displayName };
       sessionStorage.setItem('hearu-session', JSON.stringify(next));
       window.history.replaceState(null, '', roomInviteUrl(next.code));
+      setUploadProgress({ done: 1, total: selected.length });
+
+      let failed = 0;
+      let completed = 1;
+      let cursor = 1;
+      async function uploadWorker() {
+        while (cursor < selected.length) {
+          const index = cursor;
+          cursor += 1;
+          const track = selected[index];
+          const trackForm = new FormData();
+          trackForm.set('audio', track.file);
+          trackForm.set('trackName', track.title);
+          trackForm.set('duration', String(track.duration));
+          trackForm.set('position', String(index));
+          try {
+            const upload = await fetch(`/api/rooms/${next.code}/tracks`, {
+              method: 'POST',
+              headers: { Authorization: `Bearer ${next.hostToken}` },
+              body: trackForm,
+            });
+            if (!upload.ok) failed += 1;
+          } catch {
+            failed += 1;
+          }
+          completed += 1;
+          setUploadProgress({ done: completed, total: selected.length });
+        }
+      }
+      await Promise.all(Array.from({ length: Math.min(4, selected.length - 1) }, () => uploadWorker()));
+
+      previewUrls.current.forEach((url) => URL.revokeObjectURL(url));
+      previewUrls.current.clear();
+      setSelected([]);
+      setRoomNotice(failed ? `${failed} ${failed === 1 ? 'song' : 'songs'} could not be uploaded. The rest are ready.` : '');
       setInviteCode(next.code); setSession(next); setScreen('room');
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Room creation failed.'); }
-    finally { setBusy(false); }
+    finally { setBusy(false); setUploadProgress(null); }
   }
 
   async function joinRoom(code: string, displayName: string) {
@@ -688,15 +774,15 @@ export default function Home() {
     await fetch('/api/auth/me', { method: 'DELETE' }).catch(() => undefined);
     sessionStorage.removeItem('hearu-session');
     window.history.replaceState(null, '', window.location.pathname);
-    setInviteCode(''); setSession(null); setPayload(null); setSelected(null); setAccountOpen(false); setScreen('home'); setAuthUser(null);
+    setInviteCode(''); setRoomNotice(''); setSession(null); setPayload(null); setSelected([]); setAccountOpen(false); setScreen('home'); setAuthUser(null);
   }
 
-  async function updatePlayback(isPlaying: boolean, nextPosition: number) {
+  async function updatePlayback(isPlaying: boolean, nextPosition: number, trackId?: string) {
     if (!session || !payload) return;
     const response = await fetch(`/api/rooms/${session.code}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.hostToken ?? ''}`, 'X-Member-Id': session.memberId },
-      body: JSON.stringify({ isPlaying, position: nextPosition }),
+      body: JSON.stringify({ isPlaying, position: nextPosition, trackId }),
     });
     if (response.ok) await readRoom();
   }
@@ -716,6 +802,19 @@ export default function Home() {
     setPosition(value); await updatePlayback(payload.room.isPlaying, value);
   }
 
+  async function selectRoomTrack(trackId: string) {
+    if (!payload || trackId === payload.room.currentTrackId) return;
+    await updatePlayback(payload.room.isPlaying, 0, trackId);
+  }
+
+  async function handleTrackEnded() {
+    if (!payload) return;
+    const currentIndex = payload.tracks.findIndex((track) => track.id === payload.room.currentTrackId);
+    const next = payload.tracks[currentIndex + 1];
+    if (next) await updatePlayback(true, 0, next.id);
+    else await updatePlayback(false, payload.room.duration, payload.room.currentTrackId);
+  }
+
   async function react(emoji: string) {
     if (!session) return;
     await fetch(`/api/rooms/${session.code}/reaction`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ memberId: session.memberId, emoji }) });
@@ -725,7 +824,7 @@ export default function Home() {
   function leaveRoom() {
     audioRef.current?.pause(); sessionStorage.removeItem('hearu-session');
     window.history.replaceState(null, '', window.location.pathname);
-    setInviteCode(''); setSession(null); setPayload(null); setScreen('home');
+    setInviteCode(''); setRoomNotice(''); setSession(null); setPayload(null); setScreen('home');
   }
 
   function showInviteStatus(status: InviteStatus) {
@@ -787,9 +886,9 @@ export default function Home() {
       <div className="phone-stage"><div className="phone-frame"><div className="dynamic-island" aria-hidden="true" />
         <div className="phone-screen">
           {screen === 'home' && <HomeScreen session={session} user={authUser} goTo={setScreen} openJoin={() => setJoinOpen(true)} openAccount={() => setAccountOpen(true)} />}
-          {screen === 'library' && <LibraryScreen selected={selected} goTo={setScreen} chooseFile={chooseFile} error={error} />}
-          {screen === 'create' && <CreateScreen selected={selected} defaultName={authUser.name.split(' ')[0]} goTo={setScreen} create={createRoom} busy={busy} error={error} />}
-          {screen === 'room' && <RoomScreen session={session} payload={payload} audioRef={audioRef} position={position} volume={volume} needsGesture={needsGesture} inviteStatus={inviteStatus} onLeave={leaveRoom} onToggle={togglePlayback} onSeek={seek} onVolume={setAudioVolume} onCopyInvite={() => { void copyInvite(); }} onShareInvite={() => { void shareInvite(); }} onReact={react} onSync={() => payload && void syncAudio(payload.room, true)} />}
+          {screen === 'library' && <LibraryScreen selected={selected} goTo={setScreen} chooseFiles={chooseFiles} error={error} />}
+          {screen === 'create' && <CreateScreen selected={selected} defaultName={authUser.name.split(' ')[0]} goTo={setScreen} create={createRoom} busy={busy} error={error} uploadProgress={uploadProgress} />}
+          {screen === 'room' && <RoomScreen session={session} payload={payload} audioRef={audioRef} position={position} volume={volume} needsGesture={needsGesture} inviteStatus={inviteStatus} notice={roomNotice} onLeave={leaveRoom} onToggle={togglePlayback} onSeek={seek} onVolume={setAudioVolume} onCopyInvite={() => { void copyInvite(); }} onShareInvite={() => { void shareInvite(); }} onSelectTrack={(trackId) => { void selectRoomTrack(trackId); }} onEnded={() => { void handleTrackEnded(); }} onReact={react} onSync={() => payload && void syncAudio(payload.room, true)} />}
         </div>
         <nav className="nav-dock" aria-label="App navigation"><div className={`ios-tabbar ${dragPosition !== null ? 'dragging' : ''}`} onPointerDown={startDragging} onPointerMove={moveLens} onPointerUp={finishDragging} onPointerCancel={() => setDragPosition(null)}>
           <span className="tab-slider" style={{ transform: `translateX(${(dragPosition ?? activeTab) * 100}%)` }} />

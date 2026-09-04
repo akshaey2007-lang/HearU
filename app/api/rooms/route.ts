@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { requireUser } from '@/lib/auth';
-import { createRoom, deleteTrack, roomExists, saveTrack, type MemberRecord, type RoomRecord } from '@/lib/rooms';
+import { createRoom, deleteTrack, roomExists, saveTrack, type MemberRecord, type RoomRecord, type TrackRecord } from '@/lib/rooms';
 
 const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
@@ -43,7 +43,8 @@ export async function POST(request: NextRequest) {
     const now = Date.now();
     const hostToken = randomToken();
     const memberId = crypto.randomUUID();
-    const trackKey = `rooms/${code}/${crypto.randomUUID()}`;
+    const trackId = crypto.randomUUID();
+    const trackKey = `rooms/${code}/${trackId}`;
     const durationValue = Number(form.get('duration'));
     const room: RoomRecord = {
       code,
@@ -53,6 +54,7 @@ export async function POST(request: NextRequest) {
       track_name: cleanText(form.get('trackName'), audio.name.replace(/\.[^/.]+$/, ''), 100),
       track_type: audio.type || 'audio/mpeg',
       track_size: audio.size,
+      current_track_id: trackId,
       duration: Number.isFinite(durationValue) ? Math.max(0, durationValue) : 0,
       is_playing: 0,
       position: 0,
@@ -70,10 +72,21 @@ export async function POST(request: NextRequest) {
       is_host: 1,
       last_seen: now,
     };
+    const track: TrackRecord = {
+      id: trackId,
+      room_code: code,
+      storage_key: trackKey,
+      name: room.track_name,
+      type: room.track_type,
+      size: room.track_size,
+      duration: room.duration,
+      position: 0,
+      created_at: now,
+    };
 
     await saveTrack(trackKey, audio);
     try {
-      await createRoom(room, host);
+      await createRoom(room, host, track);
     } catch (error) {
       await deleteTrack(trackKey);
       throw error;

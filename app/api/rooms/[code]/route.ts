@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { requireUser } from '@/lib/auth';
-import { activeMembers, getMember, getRoom, recentReactions, updatePlayback } from '@/lib/rooms';
+import { activeMembers, getMember, getRoom, getRoomTracks, recentReactions, updatePlayback, type TrackRecord } from '@/lib/rooms';
 
 type Context = { params: Promise<{ code: string }> };
 
@@ -9,16 +9,17 @@ function normalizedCode(value: string) {
   return value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4);
 }
 
-function publicState(room: NonNullable<Awaited<ReturnType<typeof getRoom>>>, now: number) {
+function publicState(room: NonNullable<Awaited<ReturnType<typeof getRoom>>>, track: TrackRecord, now: number) {
   const elapsed = room.is_playing ? Math.max(0, (now - room.position_updated_at) / 1000) : 0;
-  const position = Math.min(room.duration || Number.MAX_SAFE_INTEGER, room.position + elapsed);
+  const position = Math.min(track.duration || Number.MAX_SAFE_INTEGER, room.position + elapsed);
   return {
     code: room.code,
     name: room.name,
-    trackName: room.track_name,
-    trackType: room.track_type,
-    trackSize: room.track_size,
-    duration: room.duration,
+    currentTrackId: track.id,
+    trackName: track.name,
+    trackType: track.type,
+    trackSize: track.size,
+    duration: track.duration,
     isPlaying: Boolean(room.is_playing),
     position,
     positionUpdatedAt: room.position_updated_at,
@@ -40,13 +41,24 @@ export async function GET(request: NextRequest, context: Context) {
     const now = Date.now();
     if (room.expires_at <= now) return NextResponse.json({ error: 'This room has expired.' }, { status: 410 });
 
-    const [members, reactions] = await Promise.all([
+    const [members, reactions, tracks] = await Promise.all([
       activeMembers(code, now - 18_000),
       recentReactions(code, now - 20_000),
+      getRoomTracks(code),
     ]);
+    const currentTrack = tracks.find((track) => track.id === room.current_track_id) ?? tracks[0];
+    if (!currentTrack) return NextResponse.json({ error: 'This room has no songs.' }, { status: 404 });
 
     return NextResponse.json({
-      room: publicState(room, now),
+      room: publicState(room, currentTrack, now),
+      tracks: tracks.map((track) => ({
+        id: track.id,
+        name: track.name,
+        type: track.type,
+        size: track.size,
+        duration: track.duration,
+        position: track.position,
+      })),
       members: members.map((member) => ({
         id: member.id,
         displayName: member.display_name,
@@ -80,16 +92,22 @@ export async function PATCH(request: NextRequest, context: Context) {
     const canControl = bearer === room.host_token || (!room.host_only && Boolean(member));
     if (!canControl) return NextResponse.json({ error: 'Only the host can control playback.' }, { status: 403 });
 
-    const body = await request.json() as { isPlaying?: unknown; position?: unknown };
+    const body = await request.json() as { isPlaying?: unknown; position?: unknown; trackId?: unknown };
     if (typeof body.isPlaying !== 'boolean' || typeof body.position !== 'number' || !Number.isFinite(body.position)) {
       return NextResponse.json({ error: 'Invalid playback update.' }, { status: 400 });
     }
-    const position = Math.max(0, Math.min(room.duration || Number.MAX_SAFE_INTEGER, body.position));
+    const tracks = await getRoomTracks(code);
+    const currentTrack = tracks.find((track) => track.id === room.current_track_id) ?? tracks[0];
+    const requestedTrack = typeof body.trackId === 'string'
+      ? tracks.find((track) => track.id === body.trackId)
+      : currentTrack;
+    if (!requestedTrack) return NextResponse.json({ error: 'Song not found in this room.' }, { status: 404 });
+    const position = Math.max(0, Math.min(requestedTrack.duration || Number.MAX_SAFE_INTEGER, body.position));
     const now = Date.now();
-    await updatePlayback(code, body.isPlaying, position, now);
+    await updatePlayback(code, body.isPlaying, position, now, requestedTrack.id);
     const updated = await getRoom(code);
     if (!updated) throw new Error('Room disappeared after update');
-    return NextResponse.json({ room: publicState(updated, now) });
+    return NextResponse.json({ room: publicState(updated, requestedTrack, now) });
   } catch (error) {
     console.error('Update room failed', error);
     return NextResponse.json({ error: 'Playback could not be updated.' }, { status: 500 });
