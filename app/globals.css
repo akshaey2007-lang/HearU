@@ -621,7 +621,40 @@ button:focus-visible, input:focus-visible { outline-color: #c7ff3e; }
 .local-device-note svg { width: 12px; color: #c7ff3e; }
 .local-queue { max-height: 168px; }
 
+.music-source-picker { display: grid; justify-items: stretch; gap: 8px; margin-top: 22px; }
+.folder-scan-button {
+  width: 100%; min-height: 104px; display: flex; align-items: center; gap: 13px; padding: 17px;
+  border-radius: 23px; color: inherit; cursor: pointer; text-align: left;
+}
+.folder-scan-button:hover { transform: translateY(-2px); }
+.folder-scan-button:disabled { cursor: wait; opacity: .72; }
+.folder-scan-button > span:last-child { display: grid; gap: 5px; min-width: 0; }
+.folder-scan-button strong { color: #f3f6ed; font-size: 13px; }
+.folder-scan-button small { color: #8e9587; font-size: 11px; line-height: 1.35; }
+.choose-files-button {
+  display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 34px;
+  border: 0; background: transparent; color: #c7ff3e; font-size: 11px; font-weight: 700; cursor: pointer;
+}
+.choose-files-button svg { width: 14px; }
+.compact-source-picker { grid-template-columns: 1fr auto; align-items: center; gap: 4px 7px; margin-top: 8px; }
+.compact-source-picker .folder-scan-button { min-height: 54px; padding: 10px 12px; border-radius: 17px; }
+.compact-source-picker .folder-scan-button .upload-icon { width: 34px; height: 34px; }
+.compact-source-picker .folder-scan-button strong { font-size: 11px; }
+.compact-source-picker .folder-scan-button small { max-width: 225px; overflow: hidden; font-size: 9px; white-space: nowrap; text-overflow: ellipsis; }
+.compact-source-picker .choose-files-button { min-height: 54px; padding: 0 10px; border: 1px solid rgba(199,255,62,.18); border-radius: 17px; background: rgba(199,255,62,.07); }
+.create-song-empty {
+  display: flex; align-items: center; gap: 12px; min-height: 72px; margin-top: 13px; padding: 13px;
+  border-radius: 20px;
+}
+.create-song-empty > svg { width: 28px; height: 28px; color: #c7ff3e; }
+.create-song-empty > span { display: grid; gap: 4px; }
+.create-song-empty strong { color: #f3f6ed; font-size: 12px; }
+.create-song-empty small { color: #8e9587; font-size: 10px; }
+.selected-check { width: 18px; color: #c7ff3e; }
+
 @media (max-width: 370px) {
   .library-actions { grid-template-columns: 1fr; }
   .local-player-title p { max-width: 205px; }
+  .compact-source-picker { grid-template-columns: 1fr; }
+  .compact-source-picker .choose-files-button { min-height: 36px; }
 }

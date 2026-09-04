@@ -8,6 +8,7 @@ import {
   ChevronRight,
   Copy,
   FileAudio,
+  FolderOpen,
   Heart,
   Home as HomeIcon,
   Library,
@@ -19,6 +20,7 @@ import {
   Play,
   Plus,
   Radio,
+  RefreshCw,
   Share2,
   ShieldCheck,
   SkipBack,
@@ -103,6 +105,23 @@ type LocalPlayerController = {
   previous: () => void;
   next: () => void;
 };
+type LocalFileHandle = { kind: 'file'; name: string; getFile: () => Promise<File> };
+type LocalDirectoryHandle = {
+  kind: 'directory';
+  name: string;
+  values: () => AsyncIterableIterator<LocalFileHandle | LocalDirectoryHandle>;
+  queryPermission?: (options: { mode: 'read' }) => Promise<PermissionState>;
+};
+type LocalDirectoryWindow = Window & {
+  showDirectoryPicker?: (options?: { mode?: 'read' }) => Promise<LocalDirectoryHandle>;
+};
+type MusicSourceController = {
+  scanning: boolean;
+  message: string;
+  folderPickerAvailable: boolean;
+  chooseFiles: (files: File[]) => void;
+  scanFolder: () => void;
+};
 type ApiResult = { error?: string };
 type UploadSessionResult = ApiResult & { trackId?: string; uploadId?: string };
 type UploadPartResult = ApiResult & { partNumber?: number; etag?: string };
@@ -130,6 +149,59 @@ const screenLabels: { id: Screen; label: string; icon: typeof HomeIcon }[] = [
 
 const waveform = [18, 32, 23, 46, 29, 62, 38, 72, 51, 84, 56, 39, 69, 91, 46, 73, 58, 33, 61, 44, 80, 55, 28, 48, 31, 68, 49, 34, 57, 26, 41, 20];
 const UPLOAD_PART_BYTES = 5 * 1024 * 1024;
+const AUDIO_FILE_PATTERN = /\.(mp3|m4a|aac|wav|flac|ogg|opus|webm)$/i;
+const LOCAL_LIBRARY_DB = 'hearu-local-library';
+const LOCAL_LIBRARY_STORE = 'folders';
+
+function openLocalLibraryDatabase() {
+  return new Promise<IDBDatabase>((resolve, reject) => {
+    const request = indexedDB.open(LOCAL_LIBRARY_DB, 1);
+    request.onupgradeneeded = () => {
+      if (!request.result.objectStoreNames.contains(LOCAL_LIBRARY_STORE)) request.result.createObjectStore(LOCAL_LIBRARY_STORE);
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function rememberMusicFolder(handle: LocalDirectoryHandle) {
+  const database = await openLocalLibraryDatabase();
+  await new Promise<void>((resolve, reject) => {
+    const transaction = database.transaction(LOCAL_LIBRARY_STORE, 'readwrite');
+    transaction.objectStore(LOCAL_LIBRARY_STORE).put(handle, 'music');
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+  });
+  database.close();
+}
+
+async function readRememberedMusicFolder() {
+  const database = await openLocalLibraryDatabase();
+  const handle = await new Promise<LocalDirectoryHandle | null>((resolve, reject) => {
+    const request = database.transaction(LOCAL_LIBRARY_STORE, 'readonly').objectStore(LOCAL_LIBRARY_STORE).get('music');
+    request.onsuccess = () => resolve((request.result as LocalDirectoryHandle | undefined) ?? null);
+    request.onerror = () => reject(request.error);
+  });
+  database.close();
+  return handle;
+}
+
+async function collectAudioFiles(directory: LocalDirectoryHandle, files: File[] = []) {
+  for await (const entry of directory.values()) {
+    if (files.length >= 250) break;
+    try {
+      if (entry.kind === 'directory') {
+        await collectAudioFiles(entry, files);
+        continue;
+      }
+      const file = await entry.getFile();
+      if (file.type.startsWith('audio/') || AUDIO_FILE_PATTERN.test(file.name)) files.push(file);
+    } catch {
+      // Keep scanning when an individual file or nested folder cannot be read.
+    }
+  }
+  return files;
+}
 
 async function readApiResult<T extends ApiResult>(response: Response, fallback: string): Promise<T> {
   const text = await response.text();
@@ -412,8 +484,41 @@ function HomeScreen({ session, user, goTo, openJoin, openAccount }: { session: S
   );
 }
 
-function LibraryScreen({ selected, goTo, chooseFiles, error, player }: { selected: SelectedTrack[]; goTo: (screen: Screen) => void; chooseFiles: (files: File[]) => void; error: string; player: LocalPlayerController }) {
+function MusicSourcePicker({ source, selectedCount, compact = false }: { source: MusicSourceController; selectedCount: number; compact?: boolean }) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const directoryInputRef = useRef<HTMLInputElement>(null);
+  const directoryAttributes = { webkitdirectory: '', directory: '' } as Record<string, string>;
+  const handleFiles = (files: FileList | null) => {
+    const next = Array.from(files ?? []);
+    if (next.length) source.chooseFiles(next);
+  };
+
+  return (
+    <div className={compact ? 'music-source-picker compact-source-picker' : 'music-source-picker'}>
+      <input ref={inputRef} className="sr-only" type="file" multiple accept="audio/*,.mp3,.m4a,.aac,.wav,.flac,.ogg,.opus,.webm" onChange={(event) => {
+        handleFiles(event.target.files);
+        event.target.value = '';
+      }} />
+      <input ref={directoryInputRef} className="sr-only" type="file" multiple accept="audio/*,.mp3,.m4a,.aac,.wav,.flac,.ogg,.opus,.webm" {...directoryAttributes} onChange={(event) => {
+        handleFiles(event.target.files);
+        event.target.value = '';
+      }} />
+      <button className="liquid-card folder-scan-button" disabled={source.scanning} onClick={() => {
+        if (source.folderPickerAvailable) source.scanFolder();
+        else directoryInputRef.current?.click();
+      }}>
+        <span className="upload-icon">{source.scanning ? <Loader2 className="spin" /> : selectedCount ? <RefreshCw /> : <FolderOpen />}</span>
+        <span>
+          <strong>{source.scanning ? 'Scanning for music…' : selectedCount ? 'Rescan a music folder' : 'Scan a music folder'}</strong>
+          <small>{source.message || 'Choose a folder once and HearU will find up to 250 audio files.'}</small>
+        </span>
+      </button>
+      <button className="choose-files-button" onClick={() => inputRef.current?.click()}><Upload /> Choose audio files instead</button>
+    </div>
+  );
+}
+
+function LibraryScreen({ selected, goTo, error, player, source }: { selected: SelectedTrack[]; goTo: (screen: Screen) => void; error: string; player: LocalPlayerController; source: MusicSourceController }) {
   const totalDuration = selected.reduce((sum, track) => sum + track.duration, 0);
   const totalSize = selected.reduce((sum, track) => sum + track.file.size, 0);
   const activeTrack = selected[player.activeIndex] ?? selected[0];
@@ -466,19 +571,10 @@ function LibraryScreen({ selected, goTo, chooseFiles, error, player }: { selecte
       </div>
       <div className="page-title">
         <p className="eyebrow"><FileAudio size={13} /> From this device</p>
-        <h1 id="library-title">Choose your<br /><span>songs.</span></h1>
+        <h1 id="library-title">Your local<br /><span>music.</span></h1>
       </div>
 
-      <input ref={inputRef} className="sr-only" type="file" multiple accept="audio/*,.mp3,.m4a,.wav,.flac,.ogg" onChange={(event) => {
-        const files = Array.from(event.target.files ?? []);
-        if (files.length) chooseFiles(files);
-        event.target.value = '';
-      }} />
-      <button className="liquid-card upload-zone" onClick={() => inputRef.current?.click()}>
-        <span className="upload-icon"><Upload /></span>
-        <strong>{selected.length ? 'Choose a different playlist' : 'Select songs from this device'}</strong>
-        <small>Up to 250 songs · 70 MB per file</small>
-      </button>
+      <MusicSourcePicker source={source} selectedCount={selected.length} />
       {error && <p className="form-error">{error}</p>}
 
       {selected.length ? (
@@ -504,7 +600,7 @@ function LibraryScreen({ selected, goTo, chooseFiles, error, player }: { selecte
   );
 }
 
-function CreateScreen({ selected, defaultName, goTo, create, busy, error, uploadProgress }: {
+function CreateScreen({ selected, defaultName, goTo, create, busy, error, uploadProgress, source }: {
   selected: SelectedTrack[];
   defaultName: string;
   goTo: (screen: Screen) => void;
@@ -512,28 +608,31 @@ function CreateScreen({ selected, defaultName, goTo, create, busy, error, upload
   busy: boolean;
   error: string;
   uploadProgress: { done: number; total: number } | null;
+  source: MusicSourceController;
 }) {
   const [roomName, setRoomName] = useState('After Hours');
   const [displayName, setDisplayName] = useState(defaultName);
   const [hostOnly, setHostOnly] = useState(true);
   const [reactionsEnabled, setReactionsEnabled] = useState(true);
 
-  if (!selected.length) {
-    return <section className="screen centered-state"><FileAudio /><h2>Choose songs first</h2><Button onClick={() => goTo('library')}>Open music</Button></section>;
-  }
-
   return (
     <section className="screen create-screen" aria-labelledby="create-title">
       <div className="sub-header">
-        <button className="icon-button" onClick={() => goTo('library')} aria-label="Go back"><ArrowLeft /></button>
+        <button className="icon-button" onClick={() => goTo('home')} aria-label="Go back"><ArrowLeft /></button>
         <span>New room</span><span className="header-spacer" />
       </div>
       <div className="page-title compact-title"><p className="eyebrow"><Radio size={13} /> Almost ready</p><h1 id="create-title">Set the<br /><span>room.</span></h1></div>
 
-      <div className="liquid-card selected-track compact-track">
-        <Artwork size="md" />
-        <div><small>{selected.length} SONG PLAYLIST</small><strong>{selected[0].title}</strong><span>Plays first · {formatTime(selected[0].duration)}</span></div>
-      </div>
+      {selected.length ? (
+        <div className="liquid-card selected-track compact-track">
+          <Artwork size="md" />
+          <div><small>{selected.length} SONG PLAYLIST</small><strong>{selected[0].title}</strong><span>Plays first · {formatTime(selected[0].duration)}</span></div>
+          <Check className="selected-check" />
+        </div>
+      ) : (
+        <div className="liquid-card create-song-empty"><FileAudio /><span><strong>Add music to this room</strong><small>Select songs here without leaving Create.</small></span></div>
+      )}
+      <MusicSourcePicker source={source} selectedCount={selected.length} compact />
 
       <div className="settings-card liquid-card">
         <label className="room-name-field"><span>Room name</span><input value={roomName} onChange={(event) => setRoomName(event.target.value)} maxLength={32} /></label>
@@ -544,7 +643,7 @@ function CreateScreen({ selected, defaultName, goTo, create, busy, error, upload
 
       {error && <p className="form-error" role="alert">{error}</p>}
       <div className="privacy-note"><ShieldCheck size={16} /><p><strong>Temporary by design.</strong> Uploaded songs and the room expire after six hours.</p></div>
-      <Button className="create-button" disabled={busy || !roomName.trim() || !displayName.trim()} onClick={() => create({ roomName, displayName, hostOnly, reactionsEnabled })}>
+      <Button className="create-button" disabled={busy || !selected.length || !roomName.trim() || !displayName.trim()} onClick={() => create({ roomName, displayName, hostOnly, reactionsEnabled })}>
         {busy ? <><Loader2 className="spin" /> {uploadProgress ? `Uploading ${uploadProgress.done} of ${uploadProgress.total} songs…` : 'Creating room…'}</> : <><Radio /> Create listening room <ChevronRight /></>}
       </Button>
     </section>
@@ -688,8 +787,12 @@ export default function Home() {
   const [localDuration, setLocalDuration] = useState(0);
   const [localPlayerOpen, setLocalPlayerOpen] = useState(false);
   const [localPlayRequest, setLocalPlayRequest] = useState(0);
+  const [scanning, setScanning] = useState(false);
+  const [scanMessage, setScanMessage] = useState('');
+  const [folderPickerAvailable] = useState(() => typeof window !== 'undefined' && typeof (window as LocalDirectoryWindow).showDirectoryPicker === 'function');
   const [dragPosition, setDragPosition] = useState<number | null>(null);
   const dragMoved = useRef(false);
+  const autoScanAttempted = useRef(false);
   const previewUrls = useRef<Set<string>>(new Set());
   const audioRef = useRef<HTMLAudioElement>(null);
   const localAudioRef = useRef<HTMLAudioElement>(null);
@@ -815,10 +918,10 @@ export default function Home() {
     return () => lifecycle.abort();
   }, []);
 
-  function chooseFiles(files: File[]) {
+  const chooseFiles = useCallback((files: File[]) => {
     const candidates = files.slice(0, 250);
     const supported = candidates.filter((file) => {
-      const extensionOkay = /\.(mp3|m4a|wav|flac|ogg)$/i.test(file.name);
+      const extensionOkay = AUDIO_FILE_PATTERN.test(file.name);
       return file.size > 0 && file.size <= 70 * 1024 * 1024 && (!file.type || file.type.startsWith('audio/') || extensionOkay);
     });
     if (!supported.length) { setError('Choose audio files smaller than 70 MB each.'); return; }
@@ -841,6 +944,7 @@ export default function Home() {
       return { id: crypto.randomUUID(), file, title: file.name.replace(/\.[^/.]+$/, '') || 'Untitled song', duration: 0, previewUrl };
     });
     setSelected(tracks);
+    setScanMessage(`${supported.length} ${supported.length === 1 ? 'song is' : 'songs are'} ready on this device.`);
     const skipped = files.length - supported.length;
     setError(skipped ? `${skipped} ${skipped === 1 ? 'file was' : 'files were'} skipped. HearU supports up to 250 audio files, 70 MB each.` : '');
 
@@ -850,6 +954,58 @@ export default function Home() {
       probe.addEventListener('loadedmetadata', () => finish(probe.duration), { once: true });
       probe.addEventListener('error', () => finish(0), { once: true });
     });
+  }, []);
+
+  useEffect(() => {
+    if (!authUser || autoScanAttempted.current || !folderPickerAvailable) return;
+    autoScanAttempted.current = true;
+    void (async () => {
+      try {
+        const handle = await readRememberedMusicFolder();
+        if (!handle || await handle.queryPermission?.({ mode: 'read' }) !== 'granted') {
+          setScanMessage('Tap scan to allow access to your music folder.');
+          return;
+        }
+        setScanning(true);
+        setScanMessage(`Checking ${handle.name}…`);
+        const files = (await collectAudioFiles(handle)).sort((a, b) => a.name.localeCompare(b.name));
+        if (!files.length) {
+          setScanMessage(`No supported audio files found in ${handle.name}.`);
+          return;
+        }
+        chooseFiles(files);
+        setScanMessage(`${files.length} ${files.length === 1 ? 'song' : 'songs'} loaded automatically from ${handle.name}.`);
+      } catch {
+        setScanMessage('Tap scan to reconnect your music folder.');
+      } finally {
+        setScanning(false);
+      }
+    })();
+  }, [authUser, chooseFiles, folderPickerAvailable]);
+
+  async function scanLocalFolder() {
+    const picker = (window as LocalDirectoryWindow).showDirectoryPicker;
+    if (!picker) return;
+    setScanning(true);
+    setError('');
+    try {
+      const handle = await picker({ mode: 'read' });
+      setScanMessage(`Scanning ${handle.name}…`);
+      const files = (await collectAudioFiles(handle)).sort((a, b) => a.name.localeCompare(b.name));
+      if (!files.length) {
+        setError('No supported audio files were found in that folder.');
+        setScanMessage('Choose another folder or select audio files directly.');
+        return;
+      }
+      await rememberMusicFolder(handle).catch(() => undefined);
+      chooseFiles(files);
+      setScanMessage(`${files.length} ${files.length === 1 ? 'song' : 'songs'} found in ${handle.name}. HearU will rescan it next time.`);
+    } catch (cause) {
+      if (cause instanceof DOMException && cause.name === 'AbortError') return;
+      setError('HearU could not scan that folder. You can still choose audio files directly.');
+    } finally {
+      setScanning(false);
+    }
   }
 
   function openLocalTrack(index: number) {
@@ -981,6 +1137,7 @@ export default function Home() {
     window.history.replaceState(null, '', window.location.pathname);
     setInviteCode(''); setRoomNotice(''); setSession(null); setPayload(null); setSelected([]); setAccountOpen(false); setScreen('home'); setAuthUser(null);
     setLocalPlayerOpen(false); setLocalTrackIndex(0); setLocalPosition(0); setLocalDuration(0); setLocalIsPlaying(false); setLocalPlayRequest(0);
+    setScanning(false); setScanMessage(''); autoScanAttempted.current = false;
   }
 
   async function updatePlayback(isPlaying: boolean, nextPosition: number, trackId?: string) {
@@ -1092,7 +1249,13 @@ export default function Home() {
       <div className="phone-stage"><div className="phone-frame"><div className="dynamic-island" aria-hidden="true" />
         <div className="phone-screen">
           {screen === 'home' && <HomeScreen session={session} user={authUser} goTo={setScreen} openJoin={() => setJoinOpen(true)} openAccount={() => setAccountOpen(true)} />}
-          {screen === 'library' && <LibraryScreen selected={selected} goTo={setScreen} chooseFiles={chooseFiles} error={error} player={{
+          {screen === 'library' && <LibraryScreen selected={selected} goTo={setScreen} error={error} source={{
+            scanning,
+            message: scanMessage,
+            folderPickerAvailable,
+            chooseFiles,
+            scanFolder: () => { void scanLocalFolder(); },
+          }} player={{
             activeIndex: localTrackIndex,
             isPlaying: localIsPlaying,
             position: localPosition,
@@ -1105,7 +1268,13 @@ export default function Home() {
             previous: previousLocalTrack,
             next: nextLocalTrack,
           }} />}
-          {screen === 'create' && <CreateScreen selected={selected} defaultName={authUser.name.split(' ')[0]} goTo={setScreen} create={createRoom} busy={busy} error={error} uploadProgress={uploadProgress} />}
+          {screen === 'create' && <CreateScreen selected={selected} defaultName={authUser.name.split(' ')[0]} goTo={setScreen} create={createRoom} busy={busy} error={error} uploadProgress={uploadProgress} source={{
+            scanning,
+            message: scanMessage,
+            folderPickerAvailable,
+            chooseFiles,
+            scanFolder: () => { void scanLocalFolder(); },
+          }} />}
           {screen === 'room' && <RoomScreen session={session} payload={payload} audioRef={audioRef} position={position} volume={volume} needsGesture={needsGesture} inviteStatus={inviteStatus} notice={roomNotice} onLeave={leaveRoom} onToggle={togglePlayback} onSeek={seek} onVolume={setAudioVolume} onCopyInvite={() => { void copyInvite(); }} onShareInvite={() => { void shareInvite(); }} onSelectTrack={(trackId) => { void selectRoomTrack(trackId); }} onEnded={() => { void handleTrackEnded(); }} onReact={react} onSync={() => payload && void syncAudio(payload.room, true)} />}
         </div>
         <audio
