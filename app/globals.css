@@ -124,7 +124,36 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--blue); outl
 .brand-mark svg { width: 16px; }
 .app-header { display: flex; justify-content: space-between; align-items: center; padding-top: 2px; }
 .avatar { display: grid; place-items: center; width: 30px; height: 30px; flex: 0 0 auto; border: 1px solid rgba(0,0,0,0.07); border-radius: 50%; background: #e4e7ea; color: #24272b; font-size: 8px; font-weight: 750; }
-.profile-button { cursor: pointer; }
+.profile-button { display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%; background: transparent; cursor: pointer; }
+.profile-photo { display: block; flex: 0 0 auto; border: 1px solid rgba(0,0,0,.07); border-radius: 50%; object-fit: cover; background: #e4e7ea; color: #24272b; font-weight: 750; }
+.profile-photo-sm { width: 30px; height: 30px; font-size: 8px; }
+.profile-photo-lg { width: 68px; height: 68px; margin: 0 auto 15px; font-size: 18px; }
+.login-screen { position: relative; padding-top: 27px; background: radial-gradient(circle at 18% 7%, rgba(255,255,255,.95), transparent 38%); }
+.login-header { display: flex; align-items: center; justify-content: space-between; }
+.secure-label { display: flex; align-items: center; gap: 4px; color: #83888e; font-size: 6.5px; font-weight: 700; }
+.secure-label svg { width: 12px; color: #438b73; }
+.login-visual { position: relative; width: 236px; height: 204px; margin: 34px auto 0; }
+.login-logo { position: absolute; z-index: 2; top: 49px; left: 65px; display: grid; place-items: center; width: 106px; height: 106px; border-radius: 35px; background: #151618; color: white; box-shadow: 0 21px 42px rgba(24,28,34,.2), inset 0 1px rgba(255,255,255,.18); }
+.login-logo svg { width: 43px; height: 43px; stroke-width: 1.8; }
+.login-orbit { position: absolute; border: 1px solid rgba(126,137,148,.18); border-radius: 50%; }
+.orbit-one { inset: 14px 30px 16px; transform: rotate(-16deg); }
+.orbit-two { inset: 35px 8px; transform: rotate(26deg); }
+.login-avatar { position: absolute; z-index: 3; display: grid; place-items: center; width: 33px; height: 33px; border: 2px solid rgba(255,255,255,.92); border-radius: 50%; color: #41464b; font-size: 8px; font-weight: 800; box-shadow: 0 7px 16px rgba(40,46,54,.13); }
+.avatar-one { top: 10px; right: 27px; background: #d8e7ef; }
+.avatar-two { bottom: 13px; right: 17px; background: #eaded8; }
+.avatar-three { bottom: 25px; left: 13px; background: #dfe5e8; }
+.login-copy { text-align: center; }
+.login-copy .eyebrow { justify-content: center; }
+.login-copy h1 { margin: 7px 0 8px; font-size: 36px; line-height: .98; letter-spacing: -.055em; font-weight: 660; }
+.login-copy h1 span { color: #72777d; }
+.login-copy > p:last-child { max-width: 280px; margin: 0 auto; color: #858a91; font-size: 9px; line-height: 1.55; }
+.login-card { z-index: 0; display: grid; justify-items: center; gap: 5px; margin-top: 23px; padding: 17px 14px 12px; border-radius: 22px; text-align: center; }
+.login-card strong { font-size: 10px; }
+.login-card small { color: #8d9298; font-size: 6.5px; }
+.google-signin-wrap { display: grid; justify-items: center; min-height: 50px; margin-top: 8px; }
+.google-signin-wrap .form-error:empty { display: none; }
+.login-terms { display: flex; align-items: center; justify-content: center; gap: 5px; margin: 15px auto 0; color: #92979d; font-size: 6.5px; }
+.login-terms svg { width: 11px; }
 .eyebrow { display: flex; align-items: center; gap: 6px; margin: 0; color: #747980; font-size: 9px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; }
 .intro-copy, .page-title { margin-top: 44px; }
 .intro-copy h1, .page-title h1 { margin: 8px 0 10px; color: #111214; font-size: 37px; line-height: 0.99; letter-spacing: -0.055em; font-weight: 650; }
@@ -328,6 +357,12 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--blue); outl
 .join-modal .eyebrow { justify-content: center; }
 .join-modal h2 { margin: 8px 0 5px; font-size: 26px; letter-spacing: -.04em; }
 .join-modal > p:not(.eyebrow) { max-width: 260px; margin: 0 auto; color: #7e8389; font-size: 10px; line-height: 1.5; }
+.account-modal { z-index: 0; width: min(88vw, 330px); padding: 34px 28px 26px; border-radius: 28px; background: rgba(248,249,250,.84); text-align: center; animation: modal-in 260ms cubic-bezier(.2,.8,.2,1); }
+.account-modal > * { position: relative; z-index: 1; }
+.account-modal .eyebrow { justify-content: center; }
+.account-modal h2 { margin: 7px 0 3px; font-size: 22px; letter-spacing: -.04em; }
+.account-modal > p:not(.eyebrow) { margin: 0; color: #858a90; font-size: 8px; }
+.signout-button { width: 100%; height: 43px; margin-top: 22px; border: 1px solid rgba(20,24,30,.07); border-radius: 14px; background: rgba(255,255,255,.62); color: #4b5056; font-size: 9px; font-weight: 700; cursor: pointer; }
 .code-input { width: 100%; height: 64px; margin: 24px 0 12px; padding-left: .32em; border: 1px solid rgba(255,255,255,.9); border-radius: 18px; background: rgba(255,255,255,.68); box-shadow: inset 0 1px white, 0 5px 15px rgba(42,48,56,.06); color: #17191b; text-align: center; font-size: 24px; font-weight: 700; letter-spacing: .32em; text-transform: uppercase; }
 .code-input::placeholder { color: #c4c8cc; }
 .join-name-input { width: 100%; height: 43px; margin-bottom: 12px; border: 1px solid rgba(255,255,255,.9); border-radius: 14px; background: rgba(255,255,255,.68); box-shadow: inset 0 1px white; color: #17191b; padding: 0 14px; text-align: center; font-size: 10px; }

@@ -36,6 +36,21 @@ import { Switch } from '@/components/ui/switch';
 
 type Screen = 'home' | 'library' | 'create' | 'room';
 type Role = 'host' | 'listener';
+type AuthUser = { id: string; email: string; name: string; picture: string | null };
+
+type GoogleIdentity = {
+  accounts: {
+    id: {
+      initialize: (options: { client_id: string; callback: (response: { credential?: string }) => void; auto_select?: boolean; cancel_on_tap_outside?: boolean }) => void;
+      renderButton: (parent: HTMLElement, options: { theme: string; size: string; shape: string; text: string; width: number }) => void;
+      cancel: () => void;
+    };
+  };
+};
+
+declare global {
+  interface Window { google?: GoogleIdentity }
+}
 
 type SelectedTrack = {
   file: File;
@@ -114,6 +129,110 @@ function Logo() {
   );
 }
 
+function ProfileAvatar({ user, size = 'sm' }: { user: AuthUser; size?: 'sm' | 'lg' }) {
+  return user.picture
+    ? <img className={`profile-photo profile-photo-${size}`} src={user.picture} alt="" referrerPolicy="no-referrer" />
+    : <span className={`avatar profile-photo-${size}`}>{initials(user.name)}</span>;
+}
+
+function GoogleSignIn({ onSignedIn }: { onSignedIn: (user: AuthUser) => void }) {
+  const buttonRef = useRef<HTMLDivElement>(null);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function ready() {
+      const configResponse = await fetch('/api/auth/config');
+      const { clientId } = await configResponse.json() as { clientId?: string };
+      if (!clientId) throw new Error('Google login is not configured.');
+
+      if (!window.google) {
+        await new Promise<void>((resolve, reject) => {
+          const existing = document.getElementById('google-identity-services') as HTMLScriptElement | null;
+          if (existing) {
+            existing.addEventListener('load', () => resolve(), { once: true });
+            existing.addEventListener('error', () => reject(new Error('Google login could not load.')), { once: true });
+            return;
+          }
+          const script = document.createElement('script');
+          script.id = 'google-identity-services';
+          script.src = 'https://accounts.google.com/gsi/client';
+          script.async = true;
+          script.onload = () => resolve();
+          script.onerror = () => reject(new Error('Google login could not load.'));
+          document.head.appendChild(script);
+        });
+      }
+
+      if (cancelled || !window.google || !buttonRef.current) return;
+      window.google.accounts.id.initialize({
+        client_id: clientId,
+        auto_select: false,
+        cancel_on_tap_outside: true,
+        callback: async ({ credential }) => {
+          if (!credential) return setError('Google did not return a sign-in credential.');
+          setError('');
+          const response = await fetch('/api/auth/google', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ credential }),
+          });
+          const result = await response.json() as { user?: AuthUser; error?: string };
+          if (!response.ok || !result.user) return setError(result.error || 'Google sign-in failed.');
+          onSignedIn(result.user);
+        },
+      });
+      buttonRef.current.replaceChildren();
+      window.google.accounts.id.renderButton(buttonRef.current, {
+        theme: 'outline', size: 'large', shape: 'pill', text: 'continue_with', width: 300,
+      });
+    }
+
+    void ready().catch((cause) => setError(cause instanceof Error ? cause.message : 'Google login could not load.'));
+    return () => { cancelled = true; window.google?.accounts.id.cancel(); };
+  }, [onSignedIn]);
+
+  return <div className="google-signin-wrap"><div ref={buttonRef} /><p className="form-error" role="alert">{error}</p></div>;
+}
+
+function LoginScreen({ onSignedIn }: { onSignedIn: (user: AuthUser) => void }) {
+  return (
+    <section className="screen login-screen" aria-labelledby="login-title">
+      <header className="login-header"><Logo /><span className="secure-label"><ShieldCheck /> Private rooms</span></header>
+      <div className="login-visual" aria-hidden="true">
+        <span className="login-orbit orbit-one" /><span className="login-orbit orbit-two" />
+        <span className="login-logo"><AudioLines /></span>
+        <span className="login-avatar avatar-one">A</span><span className="login-avatar avatar-two">J</span><span className="login-avatar avatar-three">M</span>
+      </div>
+      <div className="login-copy">
+        <p className="eyebrow"><Sparkles size={13} /> Your sound, together</p>
+        <h1 id="login-title">Welcome to<br /><span>HearU.</span></h1>
+        <p>Sign in once, then create a room and listen in sync with friends.</p>
+      </div>
+      <div className="liquid-card login-card">
+        <strong>Continue securely</strong>
+        <small>HearU only uses your name, email and profile photo.</small>
+        <GoogleSignIn onSignedIn={onSignedIn} />
+      </div>
+      <p className="login-terms"><LockKeyhole /> Your songs stay temporary and rooms expire automatically.</p>
+    </section>
+  );
+}
+
+function AccountOverlay({ user, close, signOut }: { user: AuthUser; close: () => void; signOut: () => void }) {
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={close}>
+      <div className="account-modal liquid-card" role="dialog" aria-modal="true" aria-labelledby="account-title" onMouseDown={(event) => event.stopPropagation()}>
+        <button className="icon-button close-modal" onClick={close} aria-label="Close"><X /></button>
+        <ProfileAvatar user={user} size="lg" />
+        <p className="eyebrow">Google account</p><h2 id="account-title">{user.name}</h2><p>{user.email}</p>
+        <button className="signout-button" onClick={signOut}>Sign out</button>
+      </div>
+    </div>
+  );
+}
+
 function Artwork({ size = 'md' }: { size?: 'sm' | 'md' | 'lg' }) {
   return (
     <div className={`artwork artwork-blue artwork-${size}`} aria-hidden="true">
@@ -137,10 +256,10 @@ function AvatarStack({ members }: { members: Member[] }) {
   );
 }
 
-function HomeScreen({ session, goTo, openJoin }: { session: Session | null; goTo: (screen: Screen) => void; openJoin: () => void }) {
+function HomeScreen({ session, user, goTo, openJoin, openAccount }: { session: Session | null; user: AuthUser; goTo: (screen: Screen) => void; openJoin: () => void; openAccount: () => void }) {
   return (
     <section className="screen home-screen" aria-labelledby="home-title">
-      <header className="app-header"><Logo /><span className="avatar profile-button">{initials(session?.displayName ?? 'Guest')}</span></header>
+      <header className="app-header"><Logo /><button className="profile-button" onClick={openAccount} aria-label="Open account"><ProfileAvatar user={user} /></button></header>
       <div className="intro-copy">
         <p className="eyebrow"><Sparkles size={13} /> Your sound, together</p>
         <h1 id="home-title">Listen closer.<br /><span>Stay in sync.</span></h1>
@@ -229,15 +348,16 @@ function LibraryScreen({ selected, goTo, chooseFile, error }: { selected: Select
   );
 }
 
-function CreateScreen({ selected, goTo, create, busy, error }: {
+function CreateScreen({ selected, defaultName, goTo, create, busy, error }: {
   selected: SelectedTrack | null;
+  defaultName: string;
   goTo: (screen: Screen) => void;
   create: (settings: { roomName: string; displayName: string; hostOnly: boolean; reactionsEnabled: boolean }) => void;
   busy: boolean;
   error: string;
 }) {
   const [roomName, setRoomName] = useState('After Hours');
-  const [displayName, setDisplayName] = useState('Host');
+  const [displayName, setDisplayName] = useState(defaultName);
   const [hostOnly, setHostOnly] = useState(true);
   const [reactionsEnabled, setReactionsEnabled] = useState(true);
 
@@ -337,9 +457,9 @@ function RoomScreen({ session, payload, audioRef, position, volume, needsGesture
   );
 }
 
-function JoinOverlay({ close, join }: { close: () => void; join: (code: string, name: string) => Promise<string | null> }) {
+function JoinOverlay({ defaultName, close, join }: { defaultName: string; close: () => void; join: (code: string, name: string) => Promise<string | null> }) {
   const [code, setCode] = useState('');
-  const [name, setName] = useState('Friend');
+  const [name, setName] = useState(defaultName);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -365,6 +485,9 @@ function JoinOverlay({ close, join }: { close: () => void; join: (code: string, 
 }
 
 export default function Home() {
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [accountOpen, setAccountOpen] = useState(false);
   const [screen, setScreen] = useState<Screen>('home');
   const [selected, setSelected] = useState<SelectedTrack | null>(null);
   const [session, setSession] = useState<Session | null>(null);
@@ -384,13 +507,29 @@ export default function Home() {
   const visibleTab = dragPosition === null ? activeTab : Math.round(dragPosition);
 
   useEffect(() => {
+    let active = true;
+    void fetch('/api/auth/me', { cache: 'no-store' })
+      .then(async (response) => response.ok ? response.json() as Promise<{ user: AuthUser }> : { user: null })
+      .then(({ user }) => { if (active) setAuthUser(user); })
+      .catch(() => undefined)
+      .finally(() => { if (active) setAuthLoading(false); });
+    return () => { active = false; };
+  }, []);
+
+  const handleSignedIn = useCallback((user: AuthUser) => {
+    setAuthUser(user);
+    setAuthLoading(false);
+  }, []);
+
+  useEffect(() => {
+    if (!authUser) return;
     const saved = sessionStorage.getItem('hearu-session');
     if (!saved) return;
     try {
       const restored = JSON.parse(saved) as Session;
       if (restored.code && restored.memberId) { setSession(restored); setScreen('room'); }
     } catch { sessionStorage.removeItem('hearu-session'); }
-  }, []);
+  }, [authUser]);
 
   const syncAudio = useCallback(async (room: RoomState, force = false) => {
     const audio = audioRef.current;
@@ -405,8 +544,11 @@ export default function Home() {
   }, []);
 
   const readRoom = useCallback(async () => {
-    if (!session) return;
+    if (!session || !authUser) return;
     const response = await fetch(`/api/rooms/${session.code}`, { cache: 'no-store' });
+    if (response.status === 401) {
+      sessionStorage.removeItem('hearu-session'); setSession(null); setPayload(null); setAuthUser(null); setScreen('home'); return;
+    }
     if (response.status === 404 || response.status === 410) {
       sessionStorage.removeItem('hearu-session'); setSession(null); setPayload(null); setScreen('home'); return;
     }
@@ -415,17 +557,17 @@ export default function Home() {
     setPayload(next);
     setPosition(next.room.position);
     await syncAudio(next.room);
-  }, [session, syncAudio]);
+  }, [session, authUser, syncAudio]);
 
   useEffect(() => {
-    if (!session) return;
+    if (!session || !authUser) return;
     void readRoom();
     const statusTimer = window.setInterval(() => { void readRoom(); }, 1_000);
     const presenceTimer = window.setInterval(() => {
       void fetch(`/api/rooms/${session.code}/heartbeat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ memberId: session.memberId }) });
     }, 5_000);
     return () => { window.clearInterval(statusTimer); window.clearInterval(presenceTimer); };
-  }, [session, readRoom]);
+  }, [session, authUser, readRoom]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -492,6 +634,13 @@ export default function Home() {
     } catch { return 'Could not reach the room. Try again.'; }
   }
 
+  async function signOut() {
+    audioRef.current?.pause();
+    await fetch('/api/auth/me', { method: 'DELETE' }).catch(() => undefined);
+    sessionStorage.removeItem('hearu-session');
+    setSession(null); setPayload(null); setSelected(null); setAccountOpen(false); setScreen('home'); setAuthUser(null);
+  }
+
   async function updatePlayback(isPlaying: boolean, nextPosition: number) {
     if (!session || !payload) return;
     const response = await fetch(`/api/rooms/${session.code}`, {
@@ -544,13 +693,21 @@ export default function Home() {
   function moveLens(event: ReactPointerEvent<HTMLDivElement>) { if (!event.currentTarget.hasPointerCapture(event.pointerId)) return; const next = pointerPosition(event); if (Math.abs(next - activeTab) > .08) dragMoved.current = true; setDragPosition(next); }
   function finishDragging(event: ReactPointerEvent<HTMLDivElement>) { if (!event.currentTarget.hasPointerCapture(event.pointerId)) return; const target = Math.round(pointerPosition(event)); event.currentTarget.releasePointerCapture(event.pointerId); setDragPosition(null); if (screenLabels[target].id === 'room' && !session) setJoinOpen(true); else setScreen(screenLabels[target].id); }
 
+  if (authLoading) {
+    return <main className="site-shell"><div className="phone-stage"><div className="phone-frame"><div className="phone-screen"><section className="screen centered-state"><Loader2 className="spin" /><h2>Opening HearU…</h2></section></div></div></div></main>;
+  }
+
+  if (!authUser) {
+    return <main className="site-shell"><div className="phone-stage"><div className="phone-frame"><div className="dynamic-island" aria-hidden="true" /><div className="phone-screen"><LoginScreen onSignedIn={handleSignedIn} /></div></div></div></main>;
+  }
+
   return (
     <main className="site-shell">
       <div className="phone-stage"><div className="phone-frame"><div className="dynamic-island" aria-hidden="true" />
         <div className="phone-screen">
-          {screen === 'home' && <HomeScreen session={session} goTo={setScreen} openJoin={() => setJoinOpen(true)} />}
+          {screen === 'home' && <HomeScreen session={session} user={authUser} goTo={setScreen} openJoin={() => setJoinOpen(true)} openAccount={() => setAccountOpen(true)} />}
           {screen === 'library' && <LibraryScreen selected={selected} goTo={setScreen} chooseFile={chooseFile} error={error} />}
-          {screen === 'create' && <CreateScreen selected={selected} goTo={setScreen} create={createRoom} busy={busy} error={error} />}
+          {screen === 'create' && <CreateScreen selected={selected} defaultName={authUser.name.split(' ')[0]} goTo={setScreen} create={createRoom} busy={busy} error={error} />}
           {screen === 'room' && <RoomScreen session={session} payload={payload} audioRef={audioRef} position={position} volume={volume} needsGesture={needsGesture} copied={copied} onLeave={leaveRoom} onToggle={togglePlayback} onSeek={seek} onVolume={setAudioVolume} onCopy={copyCode} onReact={react} onSync={() => payload && void syncAudio(payload.room, true)} />}
         </div>
         <nav className="nav-dock" aria-label="App navigation"><div className={`ios-tabbar ${dragPosition !== null ? 'dragging' : ''}`} onPointerDown={startDragging} onPointerMove={moveLens} onPointerUp={finishDragging} onPointerCancel={() => setDragPosition(null)}>
@@ -558,7 +715,8 @@ export default function Home() {
           {screenLabels.map(({ id, label, icon: Icon }, index) => <button key={id} className={visibleTab === index ? 'active' : ''} onClick={(event) => { if (dragMoved.current) { event.preventDefault(); return; } if (id === 'room' && !session) setJoinOpen(true); else setScreen(id); }} onKeyDown={() => { dragMoved.current = false; }} aria-label={label}><Icon /><span>{label}</span></button>)}
         </div></nav>
       </div></div>
-      {joinOpen && <JoinOverlay close={() => setJoinOpen(false)} join={joinRoom} />}
+      {joinOpen && <JoinOverlay defaultName={authUser.name.split(' ')[0]} close={() => setJoinOpen(false)} join={joinRoom} />}
+      {accountOpen && <AccountOverlay user={authUser} close={() => setAccountOpen(false)} signOut={() => { void signOut(); }} />}
     </main>
   );
 }

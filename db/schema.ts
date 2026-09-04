@@ -37,3 +37,16 @@ export const reactions = sqliteTable('reactions', {
   emoji: text('emoji').notNull(),
   createdAt: integer('created_at').notNull(),
 }, (table) => [index('idx_reactions_room_created').on(table.roomCode, table.createdAt)]);
+
+export const userSessions = sqliteTable('user_sessions', {
+  tokenHash: text('token_hash').primaryKey(),
+  googleSub: text('google_sub').notNull(),
+  email: text('email').notNull(),
+  name: text('name').notNull(),
+  picture: text('picture'),
+  createdAt: integer('created_at').notNull(),
+  expiresAt: integer('expires_at').notNull(),
+}, (table) => [
+  index('idx_user_sessions_google_sub').on(table.googleSub),
+  index('idx_user_sessions_expires_at').on(table.expiresAt),
+]);

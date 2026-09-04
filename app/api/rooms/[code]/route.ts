@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+import { requireUser } from '@/lib/auth';
 import { activeMembers, getMember, getRoom, recentReactions, updatePlayback } from '@/lib/rooms';
 
 type Context = { params: Promise<{ code: string }> };
@@ -29,8 +30,9 @@ function publicState(room: NonNullable<Awaited<ReturnType<typeof getRoom>>>, now
   };
 }
 
-export async function GET(_request: NextRequest, context: Context) {
+export async function GET(request: NextRequest, context: Context) {
   try {
+    if (!await requireUser(request)) return NextResponse.json({ error: 'Sign in to enter this room.' }, { status: 401 });
     const { code: rawCode } = await context.params;
     const code = normalizedCode(rawCode);
     const room = await getRoom(code);
@@ -65,6 +67,7 @@ export async function GET(_request: NextRequest, context: Context) {
 
 export async function PATCH(request: NextRequest, context: Context) {
   try {
+    if (!await requireUser(request)) return NextResponse.json({ error: 'Sign in to control playback.' }, { status: 401 });
     const { code: rawCode } = await context.params;
     const code = normalizedCode(rawCode);
     const room = await getRoom(code);

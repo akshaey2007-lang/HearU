@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+import { requireUser } from '@/lib/auth';
 import { addReaction, getMember, getRoom } from '@/lib/rooms';
 
 type Context = { params: Promise<{ code: string }> };
@@ -7,6 +8,7 @@ const allowed = new Set(['💜', '🔥', '✨', '🥹']);
 
 export async function POST(request: NextRequest, context: Context) {
   try {
+    if (!await requireUser(request)) return NextResponse.json({ error: 'Sign in to react.' }, { status: 401 });
     const { code: rawCode } = await context.params;
     const code = rawCode.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4);
     const room = await getRoom(code);

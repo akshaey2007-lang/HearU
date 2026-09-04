@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+import { requireUser } from '@/lib/auth';
 import { createRoom, deleteTrack, roomExists, saveTrack, type MemberRecord, type RoomRecord } from '@/lib/rooms';
 
 const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -21,6 +22,7 @@ function cleanText(value: FormDataEntryValue | null, fallback: string, maxLength
 
 export async function POST(request: NextRequest) {
   try {
+    if (!await requireUser(request)) return NextResponse.json({ error: 'Sign in to create a room.' }, { status: 401 });
     const form = await request.formData();
     const audio = form.get('audio');
 
