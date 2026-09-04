@@ -127,6 +127,7 @@ export async function deleteUserSession(token: string | undefined) {
 
 export async function requireUser(request: Request) {
   const cookie = request.headers.get('cookie')?.split(';').map((part) => part.trim()).find((part) => part.startsWith(`${AUTH_COOKIE}=`));
-  const token = cookie ? decodeURIComponent(cookie.slice(AUTH_COOKIE.length + 1)) : undefined;
+  const webSession = request.headers.get('x-hearu-session')?.replace(/^Bearer\s+/i, '').trim();
+  const token = webSession || (cookie ? decodeURIComponent(cookie.slice(AUTH_COOKIE.length + 1)) : undefined);
   return getUserSession(token);
 }

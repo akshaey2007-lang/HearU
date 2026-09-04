@@ -155,6 +155,16 @@ const UPLOAD_PART_BYTES = 5 * 1024 * 1024;
 const AUDIO_FILE_PATTERN = /\.(mp3|m4a|aac|wav|flac|ogg|opus|webm)$/i;
 const LOCAL_LIBRARY_DB = 'hearu-local-library';
 const LOCAL_LIBRARY_STORE = 'folders';
+const GITHUB_PAGES_HOST = 'akshaey2007-lang.github.io';
+const HOSTED_APP_ORIGIN = 'https://hearu-listen-together.akshaey2007.chatgpt.site';
+
+function isGithubPagesApp() {
+  return typeof window !== 'undefined' && window.location.hostname === GITHUB_PAGES_HOST;
+}
+
+function apiUrl(path: string) {
+  return isGithubPagesApp() ? new URL(path, HOSTED_APP_ORIGIN).toString() : path;
+}
 
 function openLocalLibraryDatabase() {
   return new Promise<IDBDatabase>((resolve, reject) => {
@@ -269,7 +279,9 @@ function formatTime(value: number) {
 }
 
 function roomInviteUrl(code: string) {
-  const url = new URL(window.location.origin);
+  const url = isGithubPagesApp()
+    ? new URL('/HearU/', window.location.origin)
+    : new URL(window.location.origin);
   url.searchParams.set('room', code);
   return url.toString();
 }
@@ -401,18 +413,19 @@ function LoginScreen({ onSignedIn, inviteCode }: { onSignedIn: (user: AuthUser) 
 }
 
 function AccountOverlay({ user, close, signOut, theme, setTheme }: { user: AuthUser; close: () => void; signOut: () => void; theme: ThemeMode; setTheme: (theme: ThemeMode) => void }) {
+  const isWebSession = user.id.startsWith('guest:');
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={close}>
       <div className="account-modal liquid-card" role="dialog" aria-modal="true" aria-labelledby="account-title" onMouseDown={(event) => event.stopPropagation()}>
         <button className="icon-button close-modal" onClick={close} aria-label="Close"><X /></button>
         <ProfileAvatar user={user} size="lg" />
-        <p className="eyebrow">Google account</p><h2 id="account-title">{user.name}</h2><p>{user.email}</p>
+        <p className="eyebrow">{isWebSession ? 'Web session' : 'Google account'}</p><h2 id="account-title">{user.name}</h2><p>{user.email}</p>
         <div className="appearance-setting">
           <span className="appearance-icon">{theme === 'dark' ? <Moon /> : <Sun />}</span>
           <span><strong>Appearance</strong><small>{theme === 'dark' ? 'Dark mode' : 'Light mode'}</small></span>
           <Switch checked={theme === 'dark'} onCheckedChange={(checked) => setTheme(checked ? 'dark' : 'light')} aria-label="Use dark mode" />
         </div>
-        <button className="signout-button" onClick={signOut}>Sign out</button>
+        <button className="signout-button" onClick={signOut}>{isWebSession ? 'Reset session' : 'Sign out'}</button>
       </div>
     </div>
   );
@@ -739,7 +752,7 @@ function RoomScreen({ session, payload, audioRef, position, volume, needsGesture
           </button>;
         })}
       </div>
-      <audio ref={audioRef} src={`/api/rooms/${room.code}/audio?track=${encodeURIComponent(room.currentTrackId)}`} preload="auto" onLoadedMetadata={onSync} onEnded={() => canControl && onEnded()} />
+      <audio ref={audioRef} crossOrigin={isGithubPagesApp() ? 'anonymous' : undefined} src={apiUrl(`/api/rooms/${room.code}/audio?track=${encodeURIComponent(room.currentTrackId)}`)} preload="auto" onLoadedMetadata={onSync} onEnded={() => canControl && onEnded()} />
     </section>
   );
 }
@@ -1151,6 +1164,10 @@ export default function Home() {
     previewUrls.current.forEach((url) => URL.revokeObjectURL(url));
     previewUrls.current.clear();
     await fetch('/api/auth/me', { method: 'DELETE' }).catch(() => undefined);
+    if (isGithubPagesApp()) {
+      window.location.replace(new URL('/HearU/', window.location.origin));
+      return;
+    }
     sessionStorage.removeItem('hearu-session');
     window.history.replaceState(null, '', window.location.pathname);
     setInviteCode(''); setRoomNotice(''); setSession(null); setPayload(null); setSelected([]); setAccountOpen(false); setScreen('home'); setAuthUser(null);

@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { requireUser } from '@/lib/auth';
+import { corsPreflight, withCorsHandler } from '@/lib/cors';
 import { addReaction, getMember, getRoom } from '@/lib/rooms';
 
 type Context = { params: Promise<{ code: string }> };
 const allowed = new Set(['💜', '🔥', '✨', '🥹']);
 
-export async function POST(request: NextRequest, context: Context) {
+async function post(request: NextRequest, context: Context) {
   try {
     if (!await requireUser(request)) return NextResponse.json({ error: 'Sign in to react.' }, { status: 401 });
     const { code: rawCode } = await context.params;
@@ -29,3 +30,6 @@ export async function POST(request: NextRequest, context: Context) {
     return NextResponse.json({ error: 'Reaction could not be sent.' }, { status: 500 });
   }
 }
+
+export const POST = withCorsHandler(post);
+export const OPTIONS = corsPreflight;

@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { requireUser } from '@/lib/auth';
+import { corsPreflight, isGithubPagesRequest, withCorsHandler } from '@/lib/cors';
 import { getRoom, getRoomTrack, readTrack } from '@/lib/rooms';
 
 type Context = { params: Promise<{ code: string }> };
 
-export async function GET(request: NextRequest, context: Context) {
+async function get(request: NextRequest, context: Context) {
   try {
-    if (!await requireUser(request)) return NextResponse.json({ error: 'Sign in to listen.' }, { status: 401 });
+    if (!isGithubPagesRequest(request) && !await requireUser(request)) return NextResponse.json({ error: 'Sign in to listen.' }, { status: 401 });
     const { code: rawCode } = await context.params;
     const code = rawCode.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4);
     const room = await getRoom(code);
@@ -48,3 +49,6 @@ export async function GET(request: NextRequest, context: Context) {
     return NextResponse.json({ error: 'Audio could not be streamed.' }, { status: 500 });
   }
 }
+
+export const GET = withCorsHandler(get);
+export const OPTIONS = corsPreflight;

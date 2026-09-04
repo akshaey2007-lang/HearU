@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { requireUser } from '@/lib/auth';
+import { corsPreflight, withCorsHandler } from '@/lib/cors';
 import { createRoom, roomExists, type MemberRecord, type RoomRecord } from '@/lib/rooms';
 
 const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -20,7 +21,7 @@ function cleanText(value: FormDataEntryValue | null, fallback: string, maxLength
   return value.trim().replace(/\s+/g, ' ').slice(0, maxLength) || fallback;
 }
 
-export async function POST(request: NextRequest) {
+async function post(request: NextRequest) {
   try {
     if (!await requireUser(request)) return NextResponse.json({ error: 'Sign in to create a room.' }, { status: 401 });
     const form = await request.formData();
@@ -71,3 +72,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'The room could not be created. Please try again.' }, { status: 500 });
   }
 }
+
+export const POST = withCorsHandler(post);
+export const OPTIONS = corsPreflight;

@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { requireUser } from '@/lib/auth';
+import { corsPreflight, withCorsHandler } from '@/lib/cors';
 import { heartbeat } from '@/lib/rooms';
 
 type Context = { params: Promise<{ code: string }> };
 
-export async function POST(request: NextRequest, context: Context) {
+async function post(request: NextRequest, context: Context) {
   try {
     if (!await requireUser(request)) return NextResponse.json({ error: 'Sign in to update presence.' }, { status: 401 });
     const { code: rawCode } = await context.params;
@@ -21,3 +22,6 @@ export async function POST(request: NextRequest, context: Context) {
     return NextResponse.json({ error: 'Presence update failed.' }, { status: 500 });
   }
 }
+
+export const POST = withCorsHandler(post);
+export const OPTIONS = corsPreflight;

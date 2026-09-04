@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { requireUser } from '@/lib/auth';
+import { corsPreflight, withCorsHandler } from '@/lib/cors';
 import {
   abortTrackUpload,
   addTrack,
@@ -77,10 +78,10 @@ async function authorizedRoom(request: NextRequest, context: Context) {
   return { code, room };
 }
 
-export async function POST(request: NextRequest, context: Context) {
+async function post(request: NextRequest, context: Context) {
   try {
     const authorization = await authorizedRoom(request, context);
-    if ('response' in authorization) return authorization.response;
+    if ('response' in authorization) return authorization.response as NextResponse;
     const { code } = authorization;
     const body = await request.json() as UploadBody;
     const metadata = trackMetadata(body);
@@ -138,10 +139,10 @@ export async function POST(request: NextRequest, context: Context) {
   }
 }
 
-export async function PUT(request: NextRequest, context: Context) {
+async function put(request: NextRequest, context: Context) {
   try {
     const authorization = await authorizedRoom(request, context);
-    if ('response' in authorization) return authorization.response;
+    if ('response' in authorization) return authorization.response as NextResponse;
     const { code } = authorization;
     const trackId = request.nextUrl.searchParams.get('trackId');
     const uploadId = request.nextUrl.searchParams.get('uploadId');
@@ -160,10 +161,10 @@ export async function PUT(request: NextRequest, context: Context) {
   }
 }
 
-export async function DELETE(request: NextRequest, context: Context) {
+async function remove(request: NextRequest, context: Context) {
   try {
     const authorization = await authorizedRoom(request, context);
-    if ('response' in authorization) return authorization.response;
+    if ('response' in authorization) return authorization.response as NextResponse;
     const { code } = authorization;
     const trackId = request.nextUrl.searchParams.get('trackId');
     const uploadId = request.nextUrl.searchParams.get('uploadId');
@@ -175,3 +176,8 @@ export async function DELETE(request: NextRequest, context: Context) {
     return NextResponse.json({ error: 'The upload could not be cancelled.' }, { status: 500 });
   }
 }
+
+export const POST = withCorsHandler(post);
+export const PUT = withCorsHandler(put);
+export const DELETE = withCorsHandler(remove);
+export const OPTIONS = corsPreflight;

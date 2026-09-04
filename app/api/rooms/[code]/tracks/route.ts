@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { requireUser } from '@/lib/auth';
+import { corsPreflight, withCorsHandler } from '@/lib/cors';
 import { addTrack, deleteTrack, getRoom, getRoomTracks, saveTrack, type TrackRecord } from '@/lib/rooms';
 
 type Context = { params: Promise<{ code: string }> };
@@ -14,7 +15,7 @@ function cleanTrackName(value: FormDataEntryValue | null, fallback: string) {
   return value.trim().replace(/\s+/g, ' ').slice(0, 100) || fallback;
 }
 
-export async function POST(request: NextRequest, context: Context) {
+async function post(request: NextRequest, context: Context) {
   let storageKey = '';
   try {
     if (!await requireUser(request)) return NextResponse.json({ error: 'Sign in to add songs.' }, { status: 401 });
@@ -80,3 +81,6 @@ export async function POST(request: NextRequest, context: Context) {
     return NextResponse.json({ error: 'The song could not be added. Please try again.' }, { status: 500 });
   }
 }
+
+export const POST = withCorsHandler(post);
+export const OPTIONS = corsPreflight;

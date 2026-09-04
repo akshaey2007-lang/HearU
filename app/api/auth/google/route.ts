@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { AUTH_COOKIE, SESSION_SECONDS, createUserSession, verifyGoogleCredential } from '@/lib/auth';
+import { corsPreflight, withCorsHandler } from '@/lib/cors';
 
-export async function POST(request: NextRequest) {
+async function post(request: NextRequest) {
   try {
     const origin = request.headers.get('origin');
     if (!origin || origin !== new URL(request.url).origin) {
@@ -30,3 +31,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Google sign-in could not be verified.' }, { status: 401 });
   }
 }
+
+export const POST = withCorsHandler(post);
+export const OPTIONS = corsPreflight;
