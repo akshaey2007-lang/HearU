@@ -90,6 +90,9 @@ type Reaction = { id: number; memberName: string; emoji: string; createdAt: numb
 type RoomTrack = { id: string; name: string; type: string; size: number; duration: number; position: number };
 type RoomPayload = { room: RoomState; tracks: RoomTrack[]; members: Member[]; reactions: Reaction[] };
 type InviteStatus = 'idle' | 'copied' | 'shared';
+type ApiResult = { error?: string };
+type UploadSessionResult = ApiResult & { trackId?: string; uploadId?: string };
+type UploadPartResult = ApiResult & { partNumber?: number; etag?: string };
 
 type ModelContext = {
   registerTool: (
@@ -113,6 +116,63 @@ const screenLabels: { id: Screen; label: string; icon: typeof HomeIcon }[] = [
 ];
 
 const waveform = [18, 32, 23, 46, 29, 62, 38, 72, 51, 84, 56, 39, 69, 91, 46, 73, 58, 33, 61, 44, 80, 55, 28, 48, 31, 68, 49, 34, 57, 26, 41, 20];
+const UPLOAD_PART_BYTES = 5 * 1024 * 1024;
+
+async function readApiResult<T extends ApiResult>(response: Response, fallback: string): Promise<T> {
+  const text = await response.text();
+  if (text) {
+    try { return JSON.parse(text) as T; } catch { /* Use a readable fallback below. */ }
+  }
+  const error = response.status === 413
+    ? 'This song is too large for the connection. Try a smaller audio file.'
+    : fallback;
+  return { error } as T;
+}
+
+async function uploadSelectedTrack(session: Session, track: SelectedTrack, position: number) {
+  const endpoint = `/api/rooms/${session.code}/tracks/upload`;
+  const metadata = {
+    name: track.title,
+    type: track.file.type || 'audio/mpeg',
+    size: track.file.size,
+    duration: track.duration,
+    position,
+  };
+  const authorization = { Authorization: `Bearer ${session.hostToken ?? ''}` };
+  const startResponse = await fetch(endpoint, {
+    method: 'POST',
+    headers: { ...authorization, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'start', ...metadata }),
+  });
+  const started = await readApiResult<UploadSessionResult>(startResponse, 'The song upload could not start.');
+  if (!startResponse.ok || !started.trackId || !started.uploadId) throw new Error(started.error || 'The song upload could not start.');
+
+  const query = `trackId=${encodeURIComponent(started.trackId)}&uploadId=${encodeURIComponent(started.uploadId)}`;
+  const parts: { partNumber: number; etag: string }[] = [];
+  try {
+    for (let offset = 0, partNumber = 1; offset < track.file.size; offset += UPLOAD_PART_BYTES, partNumber += 1) {
+      const partResponse = await fetch(`${endpoint}?${query}&partNumber=${partNumber}`, {
+        method: 'PUT',
+        headers: { ...authorization, 'Content-Type': 'application/octet-stream' },
+        body: track.file.slice(offset, Math.min(offset + UPLOAD_PART_BYTES, track.file.size)),
+      });
+      const part = await readApiResult<UploadPartResult>(partResponse, 'Part of the song could not be uploaded.');
+      if (!partResponse.ok || typeof part.partNumber !== 'number' || !part.etag) throw new Error(part.error || 'Part of the song could not be uploaded.');
+      parts.push({ partNumber: part.partNumber, etag: part.etag });
+    }
+
+    const completeResponse = await fetch(endpoint, {
+      method: 'POST',
+      headers: { ...authorization, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'complete', trackId: started.trackId, uploadId: started.uploadId, parts, ...metadata }),
+    });
+    const completed = await readApiResult<ApiResult>(completeResponse, 'The song upload could not be finished.');
+    if (!completeResponse.ok) throw new Error(completed.error || 'The song upload could not be finished.');
+  } catch (error) {
+    void fetch(`${endpoint}?${query}`, { method: 'DELETE', headers: authorization }).catch(() => undefined);
+    throw error;
+  }
+}
 
 function formatTime(value: number) {
   if (!Number.isFinite(value) || value < 0) return '0:00';
@@ -216,7 +276,7 @@ function GoogleSignIn({ onSignedIn }: { onSignedIn: (user: AuthUser) => void }) 
       });
       buttonRef.current.replaceChildren();
       window.google.accounts.id.renderButton(buttonRef.current, {
-        theme: 'outline', size: 'large', shape: 'pill', text: 'continue_with', width: 300,
+        theme: 'filled_black', size: 'large', shape: 'pill', text: 'continue_with', width: 300,
       });
     }
 
@@ -703,18 +763,18 @@ export default function Home() {
 
   async function createRoom(settings: { roomName: string; displayName: string; hostOnly: boolean; reactionsEnabled: boolean }) {
     if (!selected.length) { setScreen('library'); return; }
-    const firstTrack = selected[0];
     setBusy(true); setError('');
     setUploadProgress({ done: 0, total: selected.length });
     try {
       const form = new FormData();
-      form.set('audio', firstTrack.file); form.set('trackName', firstTrack.title); form.set('duration', String(firstTrack.duration));
       form.set('roomName', settings.roomName); form.set('displayName', settings.displayName);
       form.set('hostOnly', String(settings.hostOnly)); form.set('reactionsEnabled', String(settings.reactionsEnabled));
       const response = await fetch('/api/rooms', { method: 'POST', body: form });
-      const result = await response.json() as { error?: string; room?: { code: string }; hostToken?: string; memberId?: string; displayName?: string };
+      const result = await readApiResult<ApiResult & { room?: { code: string }; hostToken?: string; memberId?: string; displayName?: string }>(response, 'Room creation failed.');
       if (!response.ok || !result.room || !result.hostToken || !result.memberId) throw new Error(result.error || 'Room creation failed.');
       const next: Session = { code: result.room.code, role: 'host', hostToken: result.hostToken, memberId: result.memberId, displayName: result.displayName || settings.displayName };
+
+      await uploadSelectedTrack(next, selected[0], 0);
       sessionStorage.setItem('hearu-session', JSON.stringify(next));
       window.history.replaceState(null, '', roomInviteUrl(next.code));
       setUploadProgress({ done: 1, total: selected.length });
@@ -727,18 +787,8 @@ export default function Home() {
           const index = cursor;
           cursor += 1;
           const track = selected[index];
-          const trackForm = new FormData();
-          trackForm.set('audio', track.file);
-          trackForm.set('trackName', track.title);
-          trackForm.set('duration', String(track.duration));
-          trackForm.set('position', String(index));
           try {
-            const upload = await fetch(`/api/rooms/${next.code}/tracks`, {
-              method: 'POST',
-              headers: { Authorization: `Bearer ${next.hostToken}` },
-              body: trackForm,
-            });
-            if (!upload.ok) failed += 1;
+            await uploadSelectedTrack(next, track, index);
           } catch {
             failed += 1;
           }

@@ -109,11 +109,11 @@ function legacyTrack(room: RoomRecord): TrackRecord {
   };
 }
 
-export async function createRoom(room: RoomRecord, host: MemberRecord, track: TrackRecord) {
+export async function createRoom(room: RoomRecord, host: MemberRecord, track?: TrackRecord) {
   const db = bindings().DB;
   try {
     if (!db) throw new Error('DB binding unavailable');
-    await db.batch([
+    const statements = [
       db.prepare(`
         INSERT INTO rooms (
           code, name, host_token, track_key, track_name, track_type, track_size,
@@ -130,16 +130,17 @@ export async function createRoom(room: RoomRecord, host: MemberRecord, track: Tr
         INSERT INTO members (room_code, id, display_name, is_host, last_seen)
         VALUES (?, ?, ?, ?, ?)
       `).bind(host.room_code, host.id, host.display_name, host.is_host, host.last_seen),
-      db.prepare(`
+    ];
+    if (track) statements.push(db.prepare(`
         INSERT INTO tracks (id, room_code, storage_key, name, type, size, duration, position, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).bind(track.id, track.room_code, track.storage_key, track.name, track.type, track.size, track.duration, track.position, track.created_at),
-    ]);
+      `).bind(track.id, track.room_code, track.storage_key, track.name, track.type, track.size, track.duration, track.position, track.created_at));
+    await db.batch(statements);
   } catch (error) {
     if (!canUseLocalFallback()) throw error;
     memory().rooms.set(room.code, room);
     memory().members.set(memberKey(host.room_code, host.id), host);
-    memory().tracks.set(trackKey(track.room_code, track.id), track);
+    if (track) memory().tracks.set(trackKey(track.room_code, track.id), track);
   }
 }
 
@@ -171,7 +172,7 @@ export async function getRoomTracks(code: string): Promise<TrackRecord[]> {
     `).bind(code).all<TrackRecord>();
     if (result.results.length) return result.results;
     const room = await getRoom(code);
-    return room ? [legacyTrack(room)] : [];
+    return room?.track_key ? [legacyTrack(room)] : [];
   } catch (error) {
     if (!canUseLocalFallback()) throw error;
     const tracks = [...memory().tracks.values()]
@@ -179,7 +180,7 @@ export async function getRoomTracks(code: string): Promise<TrackRecord[]> {
       .sort((a, b) => a.position - b.position);
     if (tracks.length) return tracks;
     const room = memory().rooms.get(code);
-    return room ? [legacyTrack(room)] : [];
+    return room?.track_key ? [legacyTrack(room)] : [];
   }
 }
 
@@ -193,13 +194,39 @@ export async function addTrack(track: TrackRecord) {
   const db = bindings().DB;
   try {
     if (!db) throw new Error('DB binding unavailable');
-    await db.prepare(`
+    const insert = db.prepare(`
       INSERT INTO tracks (id, room_code, storage_key, name, type, size, duration, position, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(track.id, track.room_code, track.storage_key, track.name, track.type, track.size, track.duration, track.position, track.created_at).run();
+    `).bind(track.id, track.room_code, track.storage_key, track.name, track.type, track.size, track.duration, track.position, track.created_at);
+    if (track.position === 0) {
+      await db.batch([
+        insert,
+        db.prepare(`
+          UPDATE rooms
+          SET track_key = ?, track_name = ?, track_type = ?, track_size = ?,
+              current_track_id = ?, duration = ?, version = version + 1
+          WHERE code = ?
+        `).bind(track.storage_key, track.name, track.type, track.size, track.id, track.duration, track.room_code),
+      ]);
+    } else {
+      await insert.run();
+    }
   } catch (error) {
     if (!canUseLocalFallback()) throw error;
     memory().tracks.set(trackKey(track.room_code, track.id), track);
+    if (track.position === 0) {
+      const room = memory().rooms.get(track.room_code);
+      if (room) memory().rooms.set(track.room_code, {
+        ...room,
+        track_key: track.storage_key,
+        track_name: track.name,
+        track_type: track.type,
+        track_size: track.size,
+        current_track_id: track.id,
+        duration: track.duration,
+        version: room.version + 1,
+      });
+    }
   }
 }
 
@@ -340,6 +367,31 @@ export async function saveTrack(key: string, file: File) {
     if (!canUseLocalFallback()) throw error;
     memory().audio.set(key, { bytes: new Uint8Array(await file.arrayBuffer()), type: file.type || 'audio/mpeg' });
   }
+}
+
+function mediaBucket() {
+  const bucket = bindings().MEDIA;
+  if (!bucket) throw new Error('MEDIA binding unavailable');
+  return bucket;
+}
+
+export async function beginTrackUpload(key: string, filename: string, contentType: string) {
+  return mediaBucket().createMultipartUpload(key, {
+    httpMetadata: { contentType },
+    customMetadata: { filename },
+  });
+}
+
+export async function uploadTrackPart(key: string, uploadId: string, partNumber: number, body: ArrayBuffer) {
+  return mediaBucket().resumeMultipartUpload(key, uploadId).uploadPart(partNumber, body);
+}
+
+export async function completeTrackUpload(key: string, uploadId: string, parts: R2UploadedPart[]) {
+  return mediaBucket().resumeMultipartUpload(key, uploadId).complete(parts);
+}
+
+export async function abortTrackUpload(key: string, uploadId: string) {
+  await mediaBucket().resumeMultipartUpload(key, uploadId).abort();
 }
 
 export async function deleteTrack(key: string) {

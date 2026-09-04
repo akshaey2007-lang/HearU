@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { requireUser } from '@/lib/auth';
-import { createRoom, deleteTrack, roomExists, saveTrack, type MemberRecord, type RoomRecord, type TrackRecord } from '@/lib/rooms';
+import { createRoom, roomExists, type MemberRecord, type RoomRecord } from '@/lib/rooms';
 
 const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
@@ -24,17 +24,6 @@ export async function POST(request: NextRequest) {
   try {
     if (!await requireUser(request)) return NextResponse.json({ error: 'Sign in to create a room.' }, { status: 401 });
     const form = await request.formData();
-    const audio = form.get('audio');
-
-    if (!audio || typeof audio === 'string' || audio.size === 0) {
-      return NextResponse.json({ error: 'Choose an audio file first.' }, { status: 400 });
-    }
-    if (audio.size > 70 * 1024 * 1024) {
-      return NextResponse.json({ error: 'Audio files must be 70 MB or smaller.' }, { status: 413 });
-    }
-    if (audio.type && !audio.type.startsWith('audio/')) {
-      return NextResponse.json({ error: 'That file is not a supported audio format.' }, { status: 415 });
-    }
 
     let code = randomCode();
     for (let attempt = 0; attempt < 5 && await roomExists(code); attempt += 1) code = randomCode();
@@ -43,19 +32,16 @@ export async function POST(request: NextRequest) {
     const now = Date.now();
     const hostToken = randomToken();
     const memberId = crypto.randomUUID();
-    const trackId = crypto.randomUUID();
-    const trackKey = `rooms/${code}/${trackId}`;
-    const durationValue = Number(form.get('duration'));
     const room: RoomRecord = {
       code,
       name: cleanText(form.get('roomName'), 'Listening room', 32),
       host_token: hostToken,
-      track_key: trackKey,
-      track_name: cleanText(form.get('trackName'), audio.name.replace(/\.[^/.]+$/, ''), 100),
-      track_type: audio.type || 'audio/mpeg',
-      track_size: audio.size,
-      current_track_id: trackId,
-      duration: Number.isFinite(durationValue) ? Math.max(0, durationValue) : 0,
+      track_key: '',
+      track_name: '',
+      track_type: 'audio/mpeg',
+      track_size: 0,
+      current_track_id: null,
+      duration: 0,
       is_playing: 0,
       position: 0,
       position_updated_at: now,
@@ -72,28 +58,10 @@ export async function POST(request: NextRequest) {
       is_host: 1,
       last_seen: now,
     };
-    const track: TrackRecord = {
-      id: trackId,
-      room_code: code,
-      storage_key: trackKey,
-      name: room.track_name,
-      type: room.track_type,
-      size: room.track_size,
-      duration: room.duration,
-      position: 0,
-      created_at: now,
-    };
-
-    await saveTrack(trackKey, audio);
-    try {
-      await createRoom(room, host, track);
-    } catch (error) {
-      await deleteTrack(trackKey);
-      throw error;
-    }
+    await createRoom(room, host);
 
     return NextResponse.json({
-      room: { code, name: room.name, trackName: room.track_name, duration: room.duration },
+      room: { code, name: room.name },
       hostToken,
       memberId,
       displayName: host.display_name,
