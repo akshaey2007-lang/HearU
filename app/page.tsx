@@ -15,6 +15,7 @@ import {
   Link2,
   Loader2,
   LockKeyhole,
+  Moon,
   Music2,
   Pause,
   Play,
@@ -26,6 +27,7 @@ import {
   SkipBack,
   SkipForward,
   Sparkles,
+  Sun,
   Upload,
   Users,
   Volume2,
@@ -38,6 +40,7 @@ import { Switch } from '@/components/ui/switch';
 
 type Screen = 'home' | 'library' | 'create' | 'room';
 type Role = 'host' | 'listener';
+type ThemeMode = 'dark' | 'light';
 type AuthUser = { id: string; email: string; name: string; picture: string | null };
 
 type GoogleIdentity = {
@@ -397,13 +400,18 @@ function LoginScreen({ onSignedIn, inviteCode }: { onSignedIn: (user: AuthUser) 
   );
 }
 
-function AccountOverlay({ user, close, signOut }: { user: AuthUser; close: () => void; signOut: () => void }) {
+function AccountOverlay({ user, close, signOut, theme, setTheme }: { user: AuthUser; close: () => void; signOut: () => void; theme: ThemeMode; setTheme: (theme: ThemeMode) => void }) {
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={close}>
       <div className="account-modal liquid-card" role="dialog" aria-modal="true" aria-labelledby="account-title" onMouseDown={(event) => event.stopPropagation()}>
         <button className="icon-button close-modal" onClick={close} aria-label="Close"><X /></button>
         <ProfileAvatar user={user} size="lg" />
         <p className="eyebrow">Google account</p><h2 id="account-title">{user.name}</h2><p>{user.email}</p>
+        <div className="appearance-setting">
+          <span className="appearance-icon">{theme === 'dark' ? <Moon /> : <Sun />}</span>
+          <span><strong>Appearance</strong><small>{theme === 'dark' ? 'Dark mode' : 'Light mode'}</small></span>
+          <Switch checked={theme === 'dark'} onCheckedChange={(checked) => setTheme(checked ? 'dark' : 'light')} aria-label="Use dark mode" />
+        </div>
         <button className="signout-button" onClick={signOut}>Sign out</button>
       </div>
     </div>
@@ -767,6 +775,10 @@ export default function Home() {
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [accountOpen, setAccountOpen] = useState(false);
+  const [theme, setTheme] = useState<ThemeMode>(() => {
+    if (typeof window === 'undefined') return 'dark';
+    return localStorage.getItem('hearu-theme') === 'light' ? 'light' : 'dark';
+  });
   const [screen, setScreen] = useState<Screen>('home');
   const [selected, setSelected] = useState<SelectedTrack[]>([]);
   const [session, setSession] = useState<Session | null>(null);
@@ -807,6 +819,12 @@ export default function Home() {
       setJoinOpen(true);
     }
   }, []);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.style.colorScheme = theme;
+    localStorage.setItem('hearu-theme', theme);
+  }, [theme]);
 
   useEffect(() => () => {
     localAudioRef.current?.pause();
@@ -1295,7 +1313,7 @@ export default function Home() {
         </div></nav>
       </div></div>
       {joinOpen && <JoinOverlay defaultName={authUser.name.split(' ')[0]} initialCode={inviteCode} close={() => setJoinOpen(false)} join={joinRoom} />}
-      {accountOpen && <AccountOverlay user={authUser} close={() => setAccountOpen(false)} signOut={() => { void signOut(); }} />}
+      {accountOpen && <AccountOverlay user={authUser} close={() => setAccountOpen(false)} signOut={() => { void signOut(); }} theme={theme} setTheme={setTheme} />}
     </main>
   );
 }
