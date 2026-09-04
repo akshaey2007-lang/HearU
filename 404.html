@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#070908" />
+    <title>Opening HearU</title>
+    <style>
+      :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background: #070908; color: #f7faf8; }
+      * { box-sizing: border-box; }
+      body { min-height: 100vh; margin: 0; display: grid; place-items: center; background: radial-gradient(circle at 50% 15%, rgba(192, 255, 63, 0.16), transparent 34rem), #070908; }
+      main { width: min(90vw, 24rem); padding: 2rem; text-align: center; border: 1px solid rgba(255,255,255,.14); border-radius: 2rem; background: rgba(255,255,255,.07); backdrop-filter: blur(24px) saturate(150%); }
+      h1 { margin: 0; font-size: 2rem; letter-spacing: -.055em; }
+      p { margin: .75rem 0 1.5rem; color: rgba(247,250,248,.68); line-height: 1.55; }
+      a { display: inline-flex; min-height: 3rem; align-items: center; padding: .75rem 1.35rem; border-radius: 999px; background: #c7ff42; color: #10130d; font-weight: 750; text-decoration: none; }
+    </style>
+    <script>
+      (() => {
+        const destination = new URL('https://hearu-listen-together.akshaey2007.chatgpt.site/');
+        destination.search = window.location.search;
+        destination.hash = window.location.hash;
+        window.location.replace(destination.href);
+      })();
+    </script>
+  </head>
+  <body>
+    <main>
+      <h1>Opening HearU</h1>
+      <p>This link belongs to HearU. Continue to the complete app.</p>
+      <a href="https://hearu-listen-together.akshaey2007.chatgpt.site/">Open HearU</a>
+    </main>
+  </body>
+</html>
