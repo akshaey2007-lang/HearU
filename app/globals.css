@@ -150,6 +150,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--blue); outl
 .login-card { z-index: 0; display: grid; justify-items: center; gap: 5px; margin-top: 23px; padding: 17px 14px 12px; border-radius: 22px; text-align: center; }
 .login-card strong { font-size: 10px; }
 .login-card small { color: #8d9298; font-size: 6.5px; }
+.pending-invite { display: flex; align-items: center; gap: 5px; margin-bottom: 4px; padding: 6px 9px; border: 1px solid rgba(91,116,147,.13); border-radius: 999px; background: rgba(216,228,241,.45); color: #536a83; font-size: 7px; font-weight: 750; letter-spacing: .03em; }
+.pending-invite svg { width: 11px; height: 11px; }
 .google-signin-wrap { display: grid; justify-items: center; min-height: 50px; margin-top: 8px; }
 .google-signin-wrap .form-error:empty { display: none; }
 .login-terms { display: flex; align-items: center; justify-content: center; gap: 5px; margin: 15px auto 0; color: #92979d; font-size: 6.5px; }

@@ -86,6 +86,7 @@ type RoomState = {
 type Member = { id: string; displayName: string; isHost: boolean };
 type Reaction = { id: number; memberName: string; emoji: string; createdAt: number };
 type RoomPayload = { room: RoomState; members: Member[]; reactions: Reaction[] };
+type InviteStatus = 'idle' | 'copied' | 'shared';
 
 type ModelContext = {
   registerTool: (
@@ -114,6 +115,33 @@ function formatTime(value: number) {
   if (!Number.isFinite(value) || value < 0) return '0:00';
   const minutes = Math.floor(value / 60);
   return `${minutes}:${Math.floor(value % 60).toString().padStart(2, '0')}`;
+}
+
+function roomInviteUrl(code: string) {
+  const url = new URL(window.location.origin);
+  url.searchParams.set('room', code);
+  return url.toString();
+}
+
+async function copyText(value: string) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch {
+      // The legacy selection fallback still works in some embedded browsers.
+    }
+  }
+
+  const input = document.createElement('textarea');
+  input.value = value;
+  input.style.position = 'fixed';
+  input.style.opacity = '0';
+  document.body.appendChild(input);
+  input.select();
+  const copied = document.execCommand('copy');
+  input.remove();
+  if (!copied) throw new Error('Could not copy the invite link.');
 }
 
 function initials(name: string) {
@@ -196,7 +224,7 @@ function GoogleSignIn({ onSignedIn }: { onSignedIn: (user: AuthUser) => void }) 
   return <div className="google-signin-wrap"><div ref={buttonRef} /><p className="form-error" role="alert">{error}</p></div>;
 }
 
-function LoginScreen({ onSignedIn }: { onSignedIn: (user: AuthUser) => void }) {
+function LoginScreen({ onSignedIn, inviteCode }: { onSignedIn: (user: AuthUser) => void; inviteCode: string }) {
   return (
     <section className="screen login-screen" aria-labelledby="login-title">
       <header className="login-header"><Logo /><span className="secure-label"><ShieldCheck /> Private rooms</span></header>
@@ -211,6 +239,7 @@ function LoginScreen({ onSignedIn }: { onSignedIn: (user: AuthUser) => void }) {
         <p>Sign in once, then create a room and listen in sync with friends.</p>
       </div>
       <div className="liquid-card login-card">
+        {inviteCode && <span className="pending-invite"><Link2 /> Room {inviteCode} is waiting</span>}
         <strong>Continue securely</strong>
         <small>HearU only uses your name, email and profile photo.</small>
         <GoogleSignIn onSignedIn={onSignedIn} />
@@ -296,7 +325,7 @@ function HomeScreen({ session, user, goTo, openJoin, openAccount }: { session: S
         <div className="liquid-card how-card">
           <span><Upload /><b>Import</b><small>Choose an audio file</small></span>
           <ChevronRight />
-          <span><Share2 /><b>Invite</b><small>Share the room code</small></span>
+          <span><Share2 /><b>Invite</b><small>Send the room link</small></span>
           <ChevronRight />
           <span><AudioLines /><b>Listen</b><small>Playback stays synced</small></span>
         </div>
@@ -394,19 +423,20 @@ function CreateScreen({ selected, defaultName, goTo, create, busy, error }: {
   );
 }
 
-function RoomScreen({ session, payload, audioRef, position, volume, needsGesture, copied, onLeave, onToggle, onSeek, onVolume, onCopy, onReact, onSync }: {
+function RoomScreen({ session, payload, audioRef, position, volume, needsGesture, inviteStatus, onLeave, onToggle, onSeek, onVolume, onCopyInvite, onShareInvite, onReact, onSync }: {
   session: Session | null;
   payload: RoomPayload | null;
   audioRef: RefObject<HTMLAudioElement | null>;
   position: number;
   volume: number;
   needsGesture: boolean;
-  copied: boolean;
+  inviteStatus: InviteStatus;
   onLeave: () => void;
   onToggle: () => void;
   onSeek: (value: number) => void;
   onVolume: (value: number) => void;
-  onCopy: () => void;
+  onCopyInvite: () => void;
+  onShareInvite: () => void;
   onReact: (emoji: string) => void;
   onSync: () => void;
 }) {
@@ -420,7 +450,7 @@ function RoomScreen({ session, payload, audioRef, position, volume, needsGesture
       <div className="sub-header room-header">
         <button className="icon-button" onClick={onLeave} aria-label="Leave room"><X /></button>
         <div><span className="live-dot" /> LIVE · {room.code}</div>
-        <button className="icon-button" onClick={onCopy} aria-label="Share room"><Share2 /></button>
+        <button className="icon-button" onClick={onShareInvite} aria-label="Share invite link"><Share2 /></button>
       </div>
 
       <div className="listener-strip liquid-card">
@@ -451,14 +481,20 @@ function RoomScreen({ session, payload, audioRef, position, volume, needsGesture
       {room.reactionsEnabled && <div className="reaction-row" aria-label="Send a reaction">{['💜', '🔥', '✨', '🥹'].map((emoji) => <button key={emoji} onClick={() => onReact(emoji)}>{emoji}</button>)}</div>}
       <div className="reaction-feed" aria-live="polite">{reactions.slice(0, 3).map((reaction) => <span key={reaction.id}><b>{reaction.emoji}</b>{reaction.memberName}</span>)}</div>
 
-      <button className="room-code liquid-card" onClick={onCopy}><span className="setting-icon"><Link2 /></span><span><small>INVITE CODE</small><strong>{room.code}</strong></span><span className="copy-action">{copied ? <><Check /> Copied</> : <><Copy /> Copy</>}</span></button>
+      <button className="room-code liquid-card" onClick={onCopyInvite}>
+        <span className="setting-icon"><Link2 /></span>
+        <span><small>INVITE LINK</small><strong>Join room {room.code}</strong></span>
+        <span className="copy-action" aria-live="polite">
+          {inviteStatus === 'copied' ? <><Check /> Copied</> : inviteStatus === 'shared' ? <><Check /> Shared</> : <><Copy /> Copy link</>}
+        </span>
+      </button>
       <audio ref={audioRef} src={`/api/rooms/${room.code}/audio`} preload="auto" />
     </section>
   );
 }
 
-function JoinOverlay({ defaultName, close, join }: { defaultName: string; close: () => void; join: (code: string, name: string) => Promise<string | null> }) {
-  const [code, setCode] = useState('');
+function JoinOverlay({ defaultName, initialCode, close, join }: { defaultName: string; initialCode: string; close: () => void; join: (code: string, name: string) => Promise<string | null> }) {
+  const [code, setCode] = useState(initialCode);
   const [name, setName] = useState(defaultName);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -474,7 +510,7 @@ function JoinOverlay({ defaultName, close, join }: { defaultName: string; close:
     <div className="modal-backdrop" role="presentation" onMouseDown={close}>
       <div className="join-modal liquid-card" role="dialog" aria-modal="true" aria-labelledby="join-title" onMouseDown={(event) => event.stopPropagation()}>
         <button className="icon-button close-modal" onClick={close} aria-label="Close"><X /></button>
-        <span className="modal-icon"><Users /></span><p className="eyebrow">Listen together</p><h2 id="join-title">Join a room</h2><p>Enter the code shared by your friend.</p>
+        <span className="modal-icon"><Users /></span><p className="eyebrow">Listen together</p><h2 id="join-title">{initialCode ? `Join room ${initialCode}` : 'Join a room'}</h2><p>{initialCode ? 'Your invite is ready. Choose join to start listening.' : 'Enter the code shared by your friend.'}</p>
         <input className="code-input" value={code} onChange={(event) => setCode(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4))} placeholder="8K2P" aria-label="Room code" autoFocus />
         <input className="join-name-input" value={name} onChange={(event) => setName(event.target.value)} placeholder="Your name" aria-label="Your name" maxLength={24} />
         {error && <p className="form-error" role="alert">{error}</p>}
@@ -493,18 +529,27 @@ export default function Home() {
   const [session, setSession] = useState<Session | null>(null);
   const [payload, setPayload] = useState<RoomPayload | null>(null);
   const [joinOpen, setJoinOpen] = useState(false);
+  const [inviteCode, setInviteCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [position, setPosition] = useState(0);
   const [volume, setVolume] = useState(72);
   const [needsGesture, setNeedsGesture] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [inviteStatus, setInviteStatus] = useState<InviteStatus>('idle');
   const [dragPosition, setDragPosition] = useState<number | null>(null);
   const dragMoved = useRef(false);
   const previewUrl = useRef<string | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const activeTab = screenLabels.findIndex((item) => item.id === screen);
   const visibleTab = dragPosition === null ? activeTab : Math.round(dragPosition);
+
+  useEffect(() => {
+    const code = new URLSearchParams(window.location.search).get('room')?.trim().toUpperCase() ?? '';
+    if (/^[A-Z0-9]{4}$/.test(code)) {
+      setInviteCode(code);
+      setJoinOpen(true);
+    }
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -619,7 +664,9 @@ export default function Home() {
       const result = await response.json() as { error?: string; room?: { code: string }; hostToken?: string; memberId?: string; displayName?: string };
       if (!response.ok || !result.room || !result.hostToken || !result.memberId) throw new Error(result.error || 'Room creation failed.');
       const next: Session = { code: result.room.code, role: 'host', hostToken: result.hostToken, memberId: result.memberId, displayName: result.displayName || settings.displayName };
-      sessionStorage.setItem('hearu-session', JSON.stringify(next)); setSession(next); setScreen('room');
+      sessionStorage.setItem('hearu-session', JSON.stringify(next));
+      window.history.replaceState(null, '', roomInviteUrl(next.code));
+      setInviteCode(next.code); setSession(next); setScreen('room');
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Room creation failed.'); }
     finally { setBusy(false); }
   }
@@ -630,7 +677,9 @@ export default function Home() {
       const result = await response.json() as { error?: string; memberId?: string; displayName?: string };
       if (!response.ok || !result.memberId) return result.error || 'Could not join this room.';
       const next: Session = { code, role: 'listener', memberId: result.memberId, displayName: result.displayName || displayName };
-      sessionStorage.setItem('hearu-session', JSON.stringify(next)); setSession(next); setJoinOpen(false); setScreen('room'); return null;
+      sessionStorage.setItem('hearu-session', JSON.stringify(next));
+      window.history.replaceState(null, '', roomInviteUrl(next.code));
+      setInviteCode(next.code); setSession(next); setJoinOpen(false); setScreen('room'); return null;
     } catch { return 'Could not reach the room. Try again.'; }
   }
 
@@ -638,7 +687,8 @@ export default function Home() {
     audioRef.current?.pause();
     await fetch('/api/auth/me', { method: 'DELETE' }).catch(() => undefined);
     sessionStorage.removeItem('hearu-session');
-    setSession(null); setPayload(null); setSelected(null); setAccountOpen(false); setScreen('home'); setAuthUser(null);
+    window.history.replaceState(null, '', window.location.pathname);
+    setInviteCode(''); setSession(null); setPayload(null); setSelected(null); setAccountOpen(false); setScreen('home'); setAuthUser(null);
   }
 
   async function updatePlayback(isPlaying: boolean, nextPosition: number) {
@@ -673,12 +723,43 @@ export default function Home() {
   }
 
   function leaveRoom() {
-    audioRef.current?.pause(); sessionStorage.removeItem('hearu-session'); setSession(null); setPayload(null); setScreen('home');
+    audioRef.current?.pause(); sessionStorage.removeItem('hearu-session');
+    window.history.replaceState(null, '', window.location.pathname);
+    setInviteCode(''); setSession(null); setPayload(null); setScreen('home');
   }
 
-  function copyCode() {
+  function showInviteStatus(status: InviteStatus) {
+    setInviteStatus(status);
+    window.setTimeout(() => setInviteStatus('idle'), 1_800);
+  }
+
+  async function copyInvite() {
     if (!session) return;
-    void navigator.clipboard?.writeText(session.code); setCopied(true); window.setTimeout(() => setCopied(false), 1_500);
+    try {
+      await copyText(roomInviteUrl(session.code));
+      showInviteStatus('copied');
+    } catch {
+      setError('Could not copy the invite link.');
+    }
+  }
+
+  async function shareInvite() {
+    if (!session) return;
+    const url = roomInviteUrl(session.code);
+    const roomName = payload?.room.name || 'my listening room';
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: 'Join me on HearU', text: `Join ${roomName} and listen with me.`, url });
+        showInviteStatus('shared');
+      } else {
+        await copyText(url);
+        showInviteStatus('copied');
+      }
+    } catch (cause) {
+      if (cause instanceof DOMException && cause.name === 'AbortError') return;
+      await copyText(url);
+      showInviteStatus('copied');
+    }
   }
 
   function setAudioVolume(value: number) {
@@ -698,7 +779,7 @@ export default function Home() {
   }
 
   if (!authUser) {
-    return <main className="site-shell"><div className="phone-stage"><div className="phone-frame"><div className="dynamic-island" aria-hidden="true" /><div className="phone-screen"><LoginScreen onSignedIn={handleSignedIn} /></div></div></div></main>;
+    return <main className="site-shell"><div className="phone-stage"><div className="phone-frame"><div className="dynamic-island" aria-hidden="true" /><div className="phone-screen"><LoginScreen onSignedIn={handleSignedIn} inviteCode={inviteCode} /></div></div></div></main>;
   }
 
   return (
@@ -708,14 +789,14 @@ export default function Home() {
           {screen === 'home' && <HomeScreen session={session} user={authUser} goTo={setScreen} openJoin={() => setJoinOpen(true)} openAccount={() => setAccountOpen(true)} />}
           {screen === 'library' && <LibraryScreen selected={selected} goTo={setScreen} chooseFile={chooseFile} error={error} />}
           {screen === 'create' && <CreateScreen selected={selected} defaultName={authUser.name.split(' ')[0]} goTo={setScreen} create={createRoom} busy={busy} error={error} />}
-          {screen === 'room' && <RoomScreen session={session} payload={payload} audioRef={audioRef} position={position} volume={volume} needsGesture={needsGesture} copied={copied} onLeave={leaveRoom} onToggle={togglePlayback} onSeek={seek} onVolume={setAudioVolume} onCopy={copyCode} onReact={react} onSync={() => payload && void syncAudio(payload.room, true)} />}
+          {screen === 'room' && <RoomScreen session={session} payload={payload} audioRef={audioRef} position={position} volume={volume} needsGesture={needsGesture} inviteStatus={inviteStatus} onLeave={leaveRoom} onToggle={togglePlayback} onSeek={seek} onVolume={setAudioVolume} onCopyInvite={() => { void copyInvite(); }} onShareInvite={() => { void shareInvite(); }} onReact={react} onSync={() => payload && void syncAudio(payload.room, true)} />}
         </div>
         <nav className="nav-dock" aria-label="App navigation"><div className={`ios-tabbar ${dragPosition !== null ? 'dragging' : ''}`} onPointerDown={startDragging} onPointerMove={moveLens} onPointerUp={finishDragging} onPointerCancel={() => setDragPosition(null)}>
           <span className="tab-slider" style={{ transform: `translateX(${(dragPosition ?? activeTab) * 100}%)` }} />
           {screenLabels.map(({ id, label, icon: Icon }, index) => <button key={id} className={visibleTab === index ? 'active' : ''} onClick={(event) => { if (dragMoved.current) { event.preventDefault(); return; } if (id === 'room' && !session) setJoinOpen(true); else setScreen(id); }} onKeyDown={() => { dragMoved.current = false; }} aria-label={label}><Icon /><span>{label}</span></button>)}
         </div></nav>
       </div></div>
-      {joinOpen && <JoinOverlay defaultName={authUser.name.split(' ')[0]} close={() => setJoinOpen(false)} join={joinRoom} />}
+      {joinOpen && <JoinOverlay defaultName={authUser.name.split(' ')[0]} initialCode={inviteCode} close={() => setJoinOpen(false)} join={joinRoom} />}
       {accountOpen && <AccountOverlay user={authUser} close={() => setAccountOpen(false)} signOut={() => { void signOut(); }} />}
     </main>
   );
