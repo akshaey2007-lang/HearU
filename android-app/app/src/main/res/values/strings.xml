@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">HearU</string>
+    <string name="audio_picker_unavailable">No audio picker is available on this device.</string>
+    <string name="unable_to_open_link">Unable to open this link.</string>
+    <string name="unsafe_page_blocked">An unsafe page was blocked.</string>
+</resources>
