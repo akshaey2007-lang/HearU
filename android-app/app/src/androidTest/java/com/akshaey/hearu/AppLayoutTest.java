@@ -18,6 +18,8 @@ import org.junit.runner.RunWith;
 
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -140,7 +142,7 @@ public class AppLayoutTest {
         // Feed two real WAV files through the app's input/change handler, then
         // use Android touch events to satisfy the media user-gesture policy.
         assertEquals("true", evaluate("(() => {"
-                + "const data=new ArrayBuffer(44+16000*2*8), v=new DataView(data);"
+                + "const data=new ArrayBuffer(44+16000*2*60), v=new DataView(data);"
                 + "const text=(o,s)=>{for(let i=0;i<s.length;i++)v.setUint8(o+i,s.charCodeAt(i));};"
                 + "text(0,'RIFF');v.setUint32(4,data.byteLength-8,true);text(8,'WAVE');text(12,'fmt ');"
                 + "v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);"
@@ -163,5 +165,40 @@ public class AppLayoutTest {
         waitFor("!!document.querySelector('.create-screen input[type=file]')");
         assertFullScreen();
         screenshot("create-room");
+
+        // Exercise the real room UI/audio with a deliberately slow server. A
+        // 2.4-second reply must not delay touch feedback or undo a newer tap.
+        StringBuilder mockServer = new StringBuilder();
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(
+                InstrumentationRegistry.getInstrumentation().getContext().getAssets().open("performance-room.js")))) {
+            String line;
+            while ((line = reader.readLine()) != null) mockServer.append(line).append('\n');
+        }
+        assertEquals("true", evaluate(mockServer.toString()));
+        tap(".create-screen .create-button");
+        waitFor("!!document.querySelector('.room-screen .play-button')");
+        assertEquals("Room opens before the rest of the playlist is uploaded", "true", evaluate(
+                "hearuPerformanceTest.tracks.length===1 && !!document.querySelector('.room-screen .upload-status')"));
+        assertEquals("The host uses its existing file without a second download", "true", evaluate(
+                "document.querySelector('.room-screen audio').src.startsWith('blob:')"));
+        tap(".room-screen button[aria-label='Play']");
+        assertEquals("Play updates without waiting for the server", "true", evaluate(
+                "!!document.querySelector('.room-screen button[aria-label=Pause]') && hearuPerformanceTest.pendingPatches===1"));
+        tap(".room-screen button[aria-label='Pause']");
+        assertEquals("Pause affects audio immediately", "true", evaluate(
+                "document.querySelector('.room-screen audio').paused && !!document.querySelector('.room-screen button[aria-label=Play]')"));
+        tap(".room-screen button[aria-label='Play']");
+        waitFor("hearuPerformanceTest.patchIntents.length>=2 && hearuPerformanceTest.pendingPatches===0");
+        assertEquals("Latest tap wins; requests never overlap", "true", evaluate(
+                "hearuPerformanceTest.peakPatches===1 && hearuPerformanceTest.room.isPlaying && !!document.querySelector('.room-screen button[aria-label=Pause]')"));
+        tap(".room-screen button[aria-label='Pause']");
+        waitFor("hearuPerformanceTest.pendingPatches===0 && !hearuPerformanceTest.room.isPlaying");
+        waitFor("hearuPerformanceTest.tracks.length===2");
+        screenshot("responsive-room");
+        tap("button[aria-label='Leave room']");
+        tap("button[aria-label='Music']");
+        waitFor("document.querySelectorAll('.local-track-row').length===2");
+        assertEquals("Room creation preserves the local library", "true", evaluate(
+                "document.querySelectorAll('.local-track-row').length===2"));
     }
 }

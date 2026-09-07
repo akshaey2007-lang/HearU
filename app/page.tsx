@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject, type ReactNode } from 'react';
 import {
   ArrowLeft,
   AudioLines,
@@ -37,6 +37,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
+import { mapConcurrent, readAudioDuration, retryPart, TransferError, xhrUpload } from '@/lib/client-transfer';
 
 type Screen = 'home' | 'library' | 'create' | 'room';
 type Role = 'host' | 'listener';
@@ -128,6 +129,7 @@ type MusicSourceController = {
 type ApiResult = { error?: string };
 type UploadSessionResult = ApiResult & { trackId?: string; uploadId?: string };
 type UploadPartResult = ApiResult & { partNumber?: number; etag?: string };
+type UploadProgress = { done: number; total: number; bytes: number; totalBytes: number };
 
 type ModelContext = {
   registerTool: (
@@ -227,7 +229,7 @@ async function readApiResult<T extends ApiResult>(response: Response, fallback: 
   return { error } as T;
 }
 
-async function uploadSelectedTrack(session: Session, track: SelectedTrack, position: number) {
+async function uploadSelectedTrack(session: Session, track: SelectedTrack, position: number, signal: AbortSignal, onProgress: (bytes: number) => void, concurrency = 3) {
   const endpoint = `/api/rooms/${session.code}/tracks/upload`;
   const metadata = {
     name: track.title,
@@ -237,7 +239,23 @@ async function uploadSelectedTrack(session: Session, track: SelectedTrack, posit
     position,
   };
   const authorization = { Authorization: `Bearer ${session.hostToken ?? ''}` };
+  // Small files do not need start/part/complete round trips. Stay safely below
+  // the hosting request-size ceiling; larger files keep the multipart path.
+  if (track.file.size <= 2 * 1024 * 1024) {
+    const form = new FormData();
+    form.set('audio', track.file);
+    form.set('trackName', track.title);
+    form.set('duration', String(track.duration));
+    form.set('position', String(position));
+    const response = await (window.hearuUpload || xhrUpload)(`/api/rooms/${session.code}/tracks`, authorization, form, (bytes) => onProgress(Math.min(track.file.size, bytes)), signal, 'POST');
+    const result = await readApiResult<ApiResult & { track?: { id: string } }>(response, 'The song could not be uploaded.');
+    if (response.ok && result.track?.id) { onProgress(track.file.size); return result.track.id; }
+    // Older servers reject position zero; proxies may reject an encoded body.
+    // Only these definitive rejections are safe to fall back from (not timeouts).
+    if (!(response.status === 413 || (position === 0 && response.status === 409))) throw new Error(result.error || 'The song could not be uploaded.');
+  }
   const startResponse = await fetch(endpoint, {
+    signal,
     method: 'POST',
     headers: { ...authorization, 'Content-Type': 'application/json' },
     body: JSON.stringify({ action: 'start', ...metadata }),
@@ -246,26 +264,34 @@ async function uploadSelectedTrack(session: Session, track: SelectedTrack, posit
   if (!startResponse.ok || !started.trackId || !started.uploadId) throw new Error(started.error || 'The song upload could not start.');
 
   const query = `trackId=${encodeURIComponent(started.trackId)}&uploadId=${encodeURIComponent(started.uploadId)}`;
-  const parts: { partNumber: number; etag: string }[] = [];
   try {
-    for (let offset = 0, partNumber = 1; offset < track.file.size; offset += UPLOAD_PART_BYTES, partNumber += 1) {
-      const partResponse = await fetch(`${endpoint}?${query}&partNumber=${partNumber}`, {
-        method: 'PUT',
-        headers: { ...authorization, 'Content-Type': 'application/octet-stream' },
-        body: track.file.slice(offset, Math.min(offset + UPLOAD_PART_BYTES, track.file.size)),
-      });
-      const part = await readApiResult<UploadPartResult>(partResponse, 'Part of the song could not be uploaded.');
-      if (!partResponse.ok || typeof part.partNumber !== 'number' || !part.etag) throw new Error(part.error || 'Part of the song could not be uploaded.');
-      parts.push({ partNumber: part.partNumber, etag: part.etag });
-    }
+    const offsets = Array.from({ length: Math.ceil(track.file.size / UPLOAD_PART_BYTES) }, (_, index) => index * UPLOAD_PART_BYTES);
+    const loaded = offsets.map(() => 0);
+    const parts = await mapConcurrent(offsets, concurrency, async (offset, index) => {
+      const blob = track.file.slice(offset, Math.min(offset + UPLOAD_PART_BYTES, track.file.size));
+      const report = (bytes: number) => {
+        loaded[index] = bytes;
+        onProgress(loaded.reduce((sum, value) => sum + value, 0));
+      };
+      return retryPart(async () => {
+        report(0);
+        const response = await (window.hearuUpload || xhrUpload)(`${endpoint}?${query}&partNumber=${index + 1}`, { ...authorization, 'Content-Type': 'application/octet-stream' }, blob, report, signal);
+        const part = await readApiResult<UploadPartResult>(response, 'Part of the song could not be uploaded.');
+        if (!response.ok || part.partNumber !== index + 1 || !part.etag) throw new TransferError(part.error || 'Part of the song could not be uploaded.', response.status >= 500 || response.status === 429 || response.status === 408);
+        report(blob.size);
+        return { partNumber: part.partNumber, etag: part.etag };
+      }, signal);
+    });
 
     const completeResponse = await fetch(endpoint, {
+      signal,
       method: 'POST',
       headers: { ...authorization, 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'complete', trackId: started.trackId, uploadId: started.uploadId, parts, ...metadata }),
     });
     const completed = await readApiResult<ApiResult>(completeResponse, 'The song upload could not be finished.');
     if (!completeResponse.ok) throw new Error(completed.error || 'The song upload could not be finished.');
+    return started.trackId;
   } catch (error) {
     void fetch(`${endpoint}?${query}`, { method: 'DELETE', headers: authorization }).catch(() => undefined);
     throw error;
@@ -276,6 +302,85 @@ function formatTime(value: number) {
   if (!Number.isFinite(value) || value < 0) return '0:00';
   const minutes = Math.floor(value / 60);
   return `${minutes}:${Math.floor(value % 60).toString().padStart(2, '0')}`;
+}
+
+function useStableEvent<A extends unknown[], R>(callback: (...args: A) => R) {
+  const latest = useRef(callback);
+  useLayoutEffect(() => { latest.current = callback; });
+  return useCallback((...args: A) => latest.current(...args), []);
+}
+
+// Keep the playback clock out of the app root and its potentially 250-row lists.
+function PlaybackTimeline({ audioRef, duration, onSeek, disabled = false, room = false }: {
+  audioRef: RefObject<HTMLAudioElement | null>; duration: number; onSeek: (value: number) => void; disabled?: boolean; room?: boolean;
+}) {
+  const [time, setTime] = useState(0);
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    const update = () => setTime(audio.currentTime || 0);
+    update();
+    audio.addEventListener('timeupdate', update);
+    audio.addEventListener('loadedmetadata', update);
+    audio.addEventListener('emptied', update);
+    return () => {
+      audio.removeEventListener('timeupdate', update);
+      audio.removeEventListener('loadedmetadata', update);
+      audio.removeEventListener('emptied', update);
+    };
+  }, [audioRef]);
+  const progress = duration ? Math.min(100, time / duration * 100) : 0;
+  return <>
+    {room && <div className="waveform" aria-hidden="true">{waveform.map((height, index) => <i key={index} className={index / waveform.length * 100 <= progress ? 'played' : ''} style={{ height: `${height}%` }} />)}</div>}
+    <input className={room ? 'seek-slider' : 'local-seek'} type="range" min={0} max={Math.max(duration, 1)} step={0.1} value={Math.min(time, Math.max(duration, 1))} disabled={disabled} onChange={(event) => { const value = Number(event.target.value); setTime(value); onSeek(value); }} aria-label="Song position" />
+    <div className="time-row"><span>{formatTime(time)}</span><span>-{formatTime(Math.max(0, duration - time))}</span></div>
+  </>;
+}
+
+const LocalTrackList = memo(function LocalTrackList({ tracks, activeIndex, open, queue = false }: { tracks: SelectedTrack[]; activeIndex: number; open: (index: number) => void; queue?: boolean }) {
+  return <div className={queue ? 'room-queue local-queue liquid-card' : 'liquid-card selection-list local-library-list'} aria-label={queue ? 'Local music queue' : 'Selected songs'}>
+    {tracks.map((track, index) => <button key={track.id} className={`${queue ? 'queue-track' : 'selection-row local-track-row'}${index === activeIndex ? ' active' : ''}`} onClick={() => open(index)}>
+      {queue ? <><span className="queue-number">{index === activeIndex ? <AudioLines /> : index + 1}</span><span><strong>{track.title}</strong><small>{index === activeIndex ? 'Now playing' : `Song ${index + 1}`}</small></span><time>{formatTime(track.duration)}</time></> : <><span>{index + 1}</span><strong>{track.title}</strong><small>{formatTime(track.duration)}</small></>}
+    </button>)}
+  </div>;
+});
+
+const RoomQueue = memo(function RoomQueue({ tracks, currentId, canControl, select }: { tracks: RoomTrack[]; currentId: string; canControl: boolean; select: (id: string) => void }) {
+  return <div className="room-queue liquid-card" aria-label="Room playlist">
+    {tracks.map((track, index) => <button key={track.id} className={track.id === currentId ? 'queue-track active' : 'queue-track'} disabled={!canControl && track.id !== currentId} onClick={() => track.id !== currentId && select(track.id)}>
+      <span className="queue-number">{track.id === currentId ? <AudioLines /> : index + 1}</span>
+      <span><strong>{track.name}</strong><small>{track.id === currentId ? 'Now playing' : `Song ${index + 1}`}</small></span>
+      <time>{formatTime(track.duration)}</time>
+    </button>)}
+  </div>;
+});
+
+const GlassNavigation = memo(function GlassNavigation({ screen, navigate }: { screen: Screen; navigate: (screen: Screen) => void }) {
+  const [dragPosition, setDragPosition] = useState<number | null>(null);
+  const dragMoved = useRef(false);
+  const activeTab = screenLabels.findIndex((item) => item.id === screen);
+  function pointerPosition(event: ReactPointerEvent<HTMLDivElement>) {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    return Math.max(0, Math.min(3, (event.clientX - bounds.left - 4) / ((bounds.width - 8) / 4) - .5));
+  }
+  return <nav className="nav-dock" aria-label="App navigation"><div className={`ios-tabbar ${dragPosition !== null ? 'dragging' : ''}`}
+    onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); dragMoved.current = false; setDragPosition(pointerPosition(event)); }}
+    onPointerMove={(event) => { if (!event.currentTarget.hasPointerCapture(event.pointerId)) return; const next = pointerPosition(event); if (Math.abs(next - activeTab) > .08) dragMoved.current = true; setDragPosition(next); }}
+    onPointerUp={(event) => { if (!event.currentTarget.hasPointerCapture(event.pointerId)) return; const target = Math.round(pointerPosition(event)); event.currentTarget.releasePointerCapture(event.pointerId); setDragPosition(null); navigate(screenLabels[target].id); }}
+    onPointerCancel={() => { setDragPosition(null); dragMoved.current = true; }}>
+    <span className="tab-slider" style={{ transform: `translateX(${(dragPosition ?? activeTab) * 100}%)` }} />
+    {screenLabels.map(({ id, label, icon: Icon }, index) => <button key={id} className={(dragPosition === null ? activeTab : Math.round(dragPosition)) === index ? 'active' : ''} onClick={(event) => { if (dragMoved.current) { event.preventDefault(); return; } navigate(id); }} onKeyDown={() => { dragMoved.current = false; }} aria-label={label}><Icon /><span>{label}</span></button>)}
+  </div></nav>;
+});
+
+function UploadStatus({ progress }: { progress: UploadProgress | null }) {
+  if (!progress) return null;
+  const percent = Math.min(100, Math.round(progress.bytes / Math.max(1, progress.totalBytes) * 100));
+  return <output className="upload-status">
+    <span>{progress.done} of {progress.total} songs ready · {percent}% transferred</span>
+    <progress value={progress.bytes} max={progress.totalBytes} aria-label="Song upload progress" />
+    <small>{percent === 100 ? 'Finishing the playlist…' : 'Keep HearU open while songs upload.'}</small>
+  </output>;
 }
 
 function roomInviteUrl(code: string) {
@@ -539,7 +644,7 @@ function MusicSourcePicker({ source, selectedCount, compact = false }: { source:
   );
 }
 
-function LibraryScreen({ selected, goTo, error, player, source }: { selected: SelectedTrack[]; goTo: (screen: Screen) => void; error: string; player: LocalPlayerController; source: MusicSourceController }) {
+function LibraryScreen({ selected, goTo, error, player, source, audioRef }: { selected: SelectedTrack[]; goTo: (screen: Screen) => void; error: string; player: LocalPlayerController; source: MusicSourceController; audioRef: RefObject<HTMLAudioElement | null> }) {
   const totalDuration = selected.reduce((sum, track) => sum + track.duration, 0);
   const totalSize = selected.reduce((sum, track) => sum + track.file.size, 0);
   const activeTrack = selected[player.activeIndex] ?? selected[0];
@@ -559,8 +664,7 @@ function LibraryScreen({ selected, goTo, error, player, source }: { selected: Se
           <span className="room-role">On device</span>
         </div>
 
-        <input className="local-seek" type="range" min={0} max={Math.max(duration, 1)} step={0.1} value={Math.min(player.position, Math.max(duration, 1))} onChange={(event) => player.seek(Number(event.target.value))} aria-label="Song position" />
-        <div className="time-row"><span>{formatTime(player.position)}</span><span>-{formatTime(Math.max(0, duration - player.position))}</span></div>
+        <PlaybackTimeline audioRef={audioRef} duration={duration} onSeek={player.seek} />
 
         <div className="player-controls local-player-controls">
           <button className="icon-button" disabled={player.activeIndex === 0} onClick={player.previous} aria-label="Previous song"><SkipBack fill="currentColor" /></button>
@@ -570,16 +674,7 @@ function LibraryScreen({ selected, goTo, error, player, source }: { selected: Se
         <p className="local-device-note"><ShieldCheck /> Playing directly from your device. Nothing is uploaded.</p>
 
         <div className="queue-heading"><span><Music2 /> Local queue</span><small>{selected.length} {selected.length === 1 ? 'song' : 'songs'}</small></div>
-        <div className="room-queue local-queue liquid-card" aria-label="Local music queue">
-          {selected.map((track, index) => {
-            const active = index === player.activeIndex;
-            return <button key={track.id} className={active ? 'queue-track active' : 'queue-track'} onClick={() => player.open(index)}>
-              <span className="queue-number">{active ? <AudioLines /> : index + 1}</span>
-              <span><strong>{track.title}</strong><small>{active ? 'Now playing' : `Song ${index + 1}`}</small></span>
-              <time>{formatTime(track.duration)}</time>
-            </button>;
-          })}
-        </div>
+        <LocalTrackList tracks={selected} activeIndex={player.activeIndex} open={player.open} queue />
       </section>
     );
   }
@@ -606,9 +701,7 @@ function LibraryScreen({ selected, goTo, error, player, source }: { selected: Se
             <div><small>PLAYLIST READY</small><strong>{selected.length} {selected.length === 1 ? 'song' : 'songs'}</strong><span>{formatTime(totalDuration)} · {(totalSize / 1024 / 1024).toFixed(1)} MB total</span></div>
             <span className="local-summary-play"><Play fill="currentColor" /></span>
           </button>
-          <div className="liquid-card selection-list local-library-list" aria-label="Selected songs">
-            {selected.map((track, index) => <button className={index === player.activeIndex ? 'selection-row local-track-row active' : 'selection-row local-track-row'} key={track.id} onClick={() => player.open(index)}><span>{index + 1}</span><strong>{track.title}</strong><small>{formatTime(track.duration)}</small></button>)}
-          </div>
+          <LocalTrackList tracks={selected} activeIndex={player.activeIndex} open={player.open} />
           <div className="library-actions">
             <Button className="local-play-button" onClick={() => player.open(player.activeIndex)}><Play fill="currentColor" /> Play locally</Button>
             <Button className="create-button" onClick={() => goTo('create')}>Create room <ChevronRight /></Button>
@@ -628,7 +721,7 @@ function CreateScreen({ selected, defaultName, goTo, create, busy, error, upload
   create: (settings: { roomName: string; displayName: string; hostOnly: boolean; reactionsEnabled: boolean }) => void;
   busy: boolean;
   error: string;
-  uploadProgress: { done: number; total: number } | null;
+  uploadProgress: UploadProgress | null;
   source: MusicSourceController;
 }) {
   const [roomName, setRoomName] = useState('After Hours');
@@ -663,6 +756,7 @@ function CreateScreen({ selected, defaultName, goTo, create, busy, error, upload
       </div>
 
       {error && <p className="form-error" role="alert">{error}</p>}
+      <UploadStatus progress={uploadProgress} />
       <div className="privacy-note"><ShieldCheck size={16} /><p><strong>Temporary by design.</strong> Uploaded songs and the room expire after six hours.</p></div>
       <Button className="create-button" disabled={busy || !selected.length || !roomName.trim() || !displayName.trim()} onClick={() => create({ roomName, displayName, hostOnly, reactionsEnabled })}>
         {busy ? <><Loader2 className="spin" /> {uploadProgress ? `Uploading ${uploadProgress.done} of ${uploadProgress.total} songs…` : 'Creating room…'}</> : <><Radio /> Create listening room <ChevronRight /></>}
@@ -671,11 +765,12 @@ function CreateScreen({ selected, defaultName, goTo, create, busy, error, upload
   );
 }
 
-function RoomScreen({ session, payload, audioRef, position, volume, needsGesture, inviteStatus, notice, onLeave, onToggle, onSeek, onVolume, onCopyInvite, onShareInvite, onSelectTrack, onEnded, onReact, onSync }: {
+function RoomScreen({ session, payload, audioRef, localSource, uploadProgress, volume, needsGesture, inviteStatus, notice, onLeave, onToggle, onSeek, onVolume, onCopyInvite, onShareInvite, onSelectTrack, onEnded, onReact, onSync }: {
   session: Session | null;
   payload: RoomPayload | null;
   audioRef: RefObject<HTMLAudioElement | null>;
-  position: number;
+  localSource?: string;
+  uploadProgress: UploadProgress | null;
   volume: number;
   needsGesture: boolean;
   inviteStatus: InviteStatus;
@@ -691,10 +786,10 @@ function RoomScreen({ session, payload, audioRef, position, volume, needsGesture
   onReact: (emoji: string) => void;
   onSync: () => void;
 }) {
+  const selectTrack = useStableEvent(onSelectTrack);
   if (!session || !payload) return <section className="screen centered-state"><Loader2 className="spin" /><h2>Connecting to room…</h2><button onClick={onLeave}>Cancel</button></section>;
   const { room, tracks, members, reactions } = payload;
   const canControl = session.role === 'host' || !room.hostOnly;
-  const progress = room.duration ? Math.min(100, (position / room.duration) * 100) : 0;
   const currentIndex = Math.max(0, tracks.findIndex((track) => track.id === room.currentTrackId));
 
   return (
@@ -711,15 +806,14 @@ function RoomScreen({ session, payload, audioRef, position, volume, needsGesture
         <span className="sync-pill"><Check size={12} /> Synced</span>
       </div>
       {notice && <p className="room-notice" role="status">{notice}</p>}
+      <UploadStatus progress={uploadProgress} />
 
       <div className="now-playing">
         <div className="hero-art-wrap"><Artwork size="lg" /><span className="glass-badge"><AudioLines size={14} /> Listening together</span></div>
         <div className="track-title-row"><div><p id="room-title">{room.trackName}</p><span>{room.name}</span></div><span className="room-role">{session.role}</span></div>
       </div>
 
-      <div className="waveform" aria-hidden="true">{waveform.map((height, index) => <i key={index} className={(index / waveform.length) * 100 <= progress ? 'played' : ''} style={{ height: `${height}%` }} />)}</div>
-      <input className="seek-slider" type="range" min={0} max={Math.max(room.duration, 1)} step={0.1} value={Math.min(position, Math.max(room.duration, 1))} disabled={!canControl} onChange={(event) => onSeek(Number(event.target.value))} aria-label="Song position" />
-      <div className="time-row"><span>{formatTime(position)}</span><span>-{formatTime(Math.max(0, room.duration - position))}</span></div>
+      <PlaybackTimeline audioRef={audioRef} duration={room.duration} onSeek={onSeek} disabled={!canControl} room />
 
       <div className="player-controls">
         <button className="icon-button" disabled={!canControl || currentIndex === 0} onClick={() => onSelectTrack(tracks[currentIndex - 1].id)} aria-label="Previous song"><SkipBack fill="currentColor" /></button>
@@ -742,17 +836,8 @@ function RoomScreen({ session, payload, audioRef, position, volume, needsGesture
         </span>
       </button>
       <div className="queue-heading"><span><Music2 /> Up next</span><small>{tracks.length} {tracks.length === 1 ? 'song' : 'songs'}</small></div>
-      <div className="room-queue liquid-card" aria-label="Room playlist">
-        {tracks.map((track, index) => {
-          const active = track.id === room.currentTrackId;
-          return <button key={track.id} className={active ? 'queue-track active' : 'queue-track'} disabled={!canControl && !active} onClick={() => !active && onSelectTrack(track.id)}>
-            <span className="queue-number">{active ? <AudioLines /> : index + 1}</span>
-            <span><strong>{track.name}</strong><small>{active ? 'Now playing' : `Song ${index + 1}`}</small></span>
-            <time>{formatTime(track.duration)}</time>
-          </button>;
-        })}
-      </div>
-      <audio ref={audioRef} crossOrigin={isGithubPagesApp() ? 'anonymous' : undefined} src={apiUrl(`/api/rooms/${room.code}/audio?track=${encodeURIComponent(room.currentTrackId)}`)} preload="auto" onLoadedMetadata={onSync} onEnded={() => canControl && onEnded()} />
+      <RoomQueue tracks={tracks} currentId={room.currentTrackId} canControl={canControl} select={selectTrack} />
+      <audio ref={audioRef} crossOrigin={!localSource && isGithubPagesApp() ? 'anonymous' : undefined} src={localSource || apiUrl(`/api/rooms/${room.code}/audio?track=${encodeURIComponent(room.currentTrackId)}`)} preload="auto" onLoadedMetadata={onSync} onEnded={() => canControl && onEnded()} />
     </section>
   );
 }
@@ -806,10 +891,13 @@ export default function Home({ standalone = false }: { standalone?: boolean } = 
   const [joinOpen, setJoinOpen] = useState(false);
   const [inviteCode, setInviteCode] = useState('');
   const [busy, setBusy] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
+  const uploadController = useRef<AbortController | null>(null);
+  const metadataController = useRef<AbortController | null>(null);
+  const [hostSources, setHostSources] = useState<Record<string, string>>({});
+  const hostUrls = useRef(new Set<string>());
   const [error, setError] = useState('');
   const [roomNotice, setRoomNotice] = useState('');
-  const [position, setPosition] = useState(0);
   const [volume, setVolume] = useState(72);
   const [needsGesture, setNeedsGesture] = useState(false);
   const [inviteStatus, setInviteStatus] = useState<InviteStatus>('idle');
@@ -822,15 +910,26 @@ export default function Home({ standalone = false }: { standalone?: boolean } = 
   const [scanning, setScanning] = useState(false);
   const [scanMessage, setScanMessage] = useState('');
   const [folderPickerAvailable] = useState(() => typeof window !== 'undefined' && typeof (window as LocalDirectoryWindow).showDirectoryPicker === 'function');
-  const [dragPosition, setDragPosition] = useState<number | null>(null);
-  const dragMoved = useRef(false);
   const autoScanAttempted = useRef(false);
   const previewUrls = useRef<Set<string>>(new Set());
   const audioRef = useRef<HTMLAudioElement>(null);
   const localAudioRef = useRef<HTMLAudioElement>(null);
-  const activeTab = screenLabels.findIndex((item) => item.id === screen);
-  const visibleTab = dragPosition === null ? activeTab : Math.round(dragPosition);
   const localTrack = selected[localTrackIndex] ?? selected[0];
+  const sessionRef = useRef(session);
+  useLayoutEffect(() => { sessionRef.current = session; }, [session]);
+  const payloadRef = useRef(payload);
+  useLayoutEffect(() => { payloadRef.current = payload; }, [payload]);
+  const playbackRevision = useRef(0);
+  const playbackSending = useRef(false);
+  const playbackNeedsRecovery = useRef(false);
+  const queuedPlayback = useRef<{ isPlaying: boolean; position: number; trackId: string } | null>(null);
+  const roomReading = useRef(false);
+  const localPlayIntent = useRef(false);
+  const localPlayRevision = useRef(0);
+  const navigate = useStableEvent((target: Screen) => {
+    if (target === 'room' && !session) setJoinOpen(true);
+    else setScreen(target);
+  });
 
   useEffect(() => {
     const code = new URLSearchParams(window.location.search).get('room')?.trim().toUpperCase() ?? '';
@@ -847,6 +946,9 @@ export default function Home({ standalone = false }: { standalone?: boolean } = 
   }, [theme]);
 
   useEffect(() => () => {
+    uploadController.current?.abort();
+    metadataController.current?.abort();
+    hostUrls.current.forEach((url) => URL.revokeObjectURL(url));
     localAudioRef.current?.pause();
     previewUrls.current.forEach((url) => URL.revokeObjectURL(url));
     previewUrls.current.clear();
@@ -857,11 +959,13 @@ export default function Home({ standalone = false }: { standalone?: boolean } = 
     if (!audio || !localTrack || localPlayRequest === 0) return;
     audioRef.current?.pause();
     audio.load();
-    void audio.play().catch(() => setLocalIsPlaying(false));
+    playLocal(audio);
   }, [localPlayRequest, localTrack?.previewUrl]);
 
   useEffect(() => {
     if (screen !== 'room') return;
+    localPlayIntent.current = false;
+    ++localPlayRevision.current;
     localAudioRef.current?.pause();
     setLocalIsPlaying(false);
   }, [screen]);
@@ -904,8 +1008,13 @@ export default function Home({ standalone = false }: { standalone?: boolean } = 
   }, []);
 
   const readRoom = useCallback(async () => {
-    if (!session || !authUser) return;
-    const response = await fetch(`/api/rooms/${session.code}`, { cache: 'no-store' });
+    if (!session || !authUser || roomReading.current || playbackSending.current) return;
+    roomReading.current = true;
+    const revision = playbackRevision.current;
+    try {
+    const requestedAt = performance.now();
+    const response = await fetch(`/api/rooms/${session.code}`, { cache: 'no-store', signal: AbortSignal.timeout(15000) });
+    if (sessionRef.current?.code !== session.code || revision !== playbackRevision.current || playbackSending.current) return;
     if (response.status === 401) {
       sessionStorage.removeItem('hearu-session'); setSession(null); setPayload(null); setAuthUser(null); setScreen('home'); return;
     }
@@ -914,9 +1023,18 @@ export default function Home({ standalone = false }: { standalone?: boolean } = 
     }
     if (!response.ok) return;
     const next = await response.json() as RoomPayload;
+    if (revision !== playbackRevision.current || playbackSending.current || sessionRef.current?.code !== session.code) return;
+    if (payloadRef.current?.room.code === next.room.code && next.room.version < payloadRef.current.room.version) return;
+    const previous = payloadRef.current;
+    if (next.room.isPlaying) next.room.position = Math.min(next.room.duration || Infinity, next.room.position + (performance.now() - requestedAt) / 2000);
+    payloadRef.current = next;
     setPayload(next);
-    setPosition(next.room.position);
-    await syncAudio(next.room);
+    const changed = !previous || previous.room.version !== next.room.version || previous.room.currentTrackId !== next.room.currentTrackId;
+    // Unchanged host polls must not repeatedly seek its already-correct local file.
+    if (changed || session.role !== 'host' || playbackNeedsRecovery.current) await syncAudio(next.room);
+    playbackNeedsRecovery.current = false;
+    } catch { /* A temporary connection loss must not interrupt local playback. */ }
+    finally { roomReading.current = false; }
   }, [session, authUser, syncAudio]);
 
   useEffect(() => {
@@ -924,18 +1042,10 @@ export default function Home({ standalone = false }: { standalone?: boolean } = 
     void readRoom();
     const statusTimer = window.setInterval(() => { void readRoom(); }, 1_000);
     const presenceTimer = window.setInterval(() => {
-      void fetch(`/api/rooms/${session.code}/heartbeat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ memberId: session.memberId }) });
+      void fetch(`/api/rooms/${session.code}/heartbeat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ memberId: session.memberId }), signal: AbortSignal.timeout(4500) }).catch(() => undefined);
     }, 5_000);
     return () => { window.clearInterval(statusTimer); window.clearInterval(presenceTimer); };
   }, [session, authUser, readRoom]);
-
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    const update = () => setPosition(audio.currentTime);
-    audio.addEventListener('timeupdate', update);
-    return () => audio.removeEventListener('timeupdate', update);
-  }, [payload?.room.code, payload?.room.currentTrackId]);
 
   useEffect(() => {
     const context = (document as Document & { modelContext?: ModelContext }).modelContext;
@@ -957,6 +1067,9 @@ export default function Home({ standalone = false }: { standalone?: boolean } = 
   }, []);
 
   const chooseFiles = useCallback((files: File[]) => {
+    metadataController.current?.abort();
+    const metadataTask = new AbortController();
+    metadataController.current = metadataTask;
     const candidates = files.slice(0, 250);
     const supported = candidates.filter((file) => {
       const extensionOkay = AUDIO_FILE_PATTERN.test(file.name);
@@ -986,12 +1099,17 @@ export default function Home({ standalone = false }: { standalone?: boolean } = 
     const skipped = files.length - supported.length;
     setError(skipped ? `${skipped} ${skipped === 1 ? 'file was' : 'files were'} skipped. HearU supports up to 250 audio files, 70 MB each.` : '');
 
-    tracks.forEach((track) => {
-      const probe = new Audio(track.previewUrl);
-      const finish = (duration: number) => setSelected((current) => current.map((item) => item.id === track.id ? { ...item, duration: Number.isFinite(duration) ? duration : 0 } : item));
-      probe.addEventListener('loadedmetadata', () => finish(probe.duration), { once: true });
-      probe.addEventListener('error', () => finish(0), { once: true });
-    });
+    // Two decoders and batched updates instead of 250 simultaneous media loads.
+    void (async () => {
+      for (let offset = 0; offset < tracks.length && !metadataTask.signal.aborted; offset += 8) {
+        const batch = tracks.slice(offset, offset + 8);
+        const durations = await mapConcurrent(batch, 2, (track) => readAudioDuration(track.previewUrl, metadataTask.signal));
+        if (metadataTask.signal.aborted) return;
+        const updates = new Map(batch.map((track, index) => [track.id, durations[index]]));
+        setSelected((current) => current.map((track) => updates.has(track.id) ? { ...track, duration: updates.get(track.id)! } : track));
+        await new Promise((resolve) => setTimeout(resolve, 16));
+      }
+    })();
   }, []);
 
   useEffect(() => {
@@ -1046,28 +1164,40 @@ export default function Home({ standalone = false }: { standalone?: boolean } = 
     }
   }
 
-  function openLocalTrack(index: number) {
+  const openLocalTrack = useStableEvent((index: number) => {
     if (!selected[index]) return;
     setLocalPlayerOpen(true);
     audioRef.current?.pause();
     if (index === localTrackIndex) {
       const audio = localAudioRef.current;
-      if (audio) void audio.play().catch(() => setLocalIsPlaying(false));
+      if (audio) playLocal(audio);
       return;
     }
     setLocalTrackIndex(index);
     setLocalPosition(0);
     setLocalDuration(selected[index].duration);
     setLocalPlayRequest((value) => value + 1);
+  });
+
+  function playLocal(audio: HTMLAudioElement) {
+    const revision = ++localPlayRevision.current;
+    localPlayIntent.current = true;
+    setLocalIsPlaying(true);
+    void audio.play().catch(() => {
+      if (revision === localPlayRevision.current) { localPlayIntent.current = false; setLocalIsPlaying(false); }
+    });
   }
 
   function toggleLocalPlayback() {
     const audio = localAudioRef.current;
     if (!audio || !localTrack) return;
-    if (audio.paused) {
+    if (!localPlayIntent.current) {
       audioRef.current?.pause();
-      void audio.play().catch(() => setLocalIsPlaying(false));
+      playLocal(audio);
     } else {
+      ++localPlayRevision.current;
+      localPlayIntent.current = false;
+      setLocalIsPlaying(false);
       audio.pause();
     }
   }
@@ -1095,6 +1225,8 @@ export default function Home({ standalone = false }: { standalone?: boolean } = 
   function finishLocalTrack() {
     if (localTrackIndex < selected.length - 1) openLocalTrack(localTrackIndex + 1);
     else {
+      localPlayIntent.current = false;
+      ++localPlayRevision.current;
       if (localAudioRef.current) localAudioRef.current.currentTime = 0;
       setLocalIsPlaying(false);
       setLocalPosition(0);
@@ -1102,53 +1234,67 @@ export default function Home({ standalone = false }: { standalone?: boolean } = 
   }
 
   async function createRoom(settings: { roomName: string; displayName: string; hostOnly: boolean; reactionsEnabled: boolean }) {
-    if (!selected.length) { setScreen('library'); return; }
+    if (!selected.length || uploadController.current) return;
+    const playlist = selected;
+    const controller = new AbortController();
+    uploadController.current = controller;
     localAudioRef.current?.pause();
+    localPlayIntent.current = false;
     setBusy(true); setError('');
-    setUploadProgress({ done: 0, total: selected.length });
+    const totalBytes = playlist.reduce((sum, track) => sum + track.file.size, 0);
+    const bytes = playlist.map(() => 0);
+    let completed = 0;
+    let lastProgress = 0;
+    const report = (index: number, loaded: number, force = false) => {
+      bytes[index] = loaded;
+      if (!force && performance.now() - lastProgress < 150) return;
+      lastProgress = performance.now();
+      if (!controller.signal.aborted) setUploadProgress({ done: completed, total: playlist.length, bytes: bytes.reduce((sum, value) => sum + value, 0), totalBytes });
+    };
+    setUploadProgress({ done: 0, total: playlist.length, bytes: 0, totalBytes });
     try {
       const form = new FormData();
       form.set('roomName', settings.roomName); form.set('displayName', settings.displayName);
       form.set('hostOnly', String(settings.hostOnly)); form.set('reactionsEnabled', String(settings.reactionsEnabled));
-      const response = await fetch('/api/rooms', { method: 'POST', body: form });
+      const response = await fetch('/api/rooms', { method: 'POST', body: form, signal: controller.signal });
       const result = await readApiResult<ApiResult & { room?: { code: string }; hostToken?: string; memberId?: string; displayName?: string }>(response, 'Room creation failed.');
       if (!response.ok || !result.room || !result.hostToken || !result.memberId) throw new Error(result.error || 'Room creation failed.');
       const next: Session = { code: result.room.code, role: 'host', hostToken: result.hostToken, memberId: result.memberId, displayName: result.displayName || settings.displayName };
 
-      await uploadSelectedTrack(next, selected[0], 0);
+      async function upload(index: number, concurrency: number) {
+        const source = playlist[index];
+        const track = source.duration ? source : { ...source, duration: await readAudioDuration(source.previewUrl, controller.signal) };
+        const id = await uploadSelectedTrack(next, track, index, controller.signal, (loaded) => report(index, loaded), concurrency);
+        controller.signal.throwIfAborted();
+        // The host already has the file; do not download it again to play it.
+        const url = URL.createObjectURL(playlist[index].file);
+        hostUrls.current.add(url);
+        setHostSources((current) => ({ ...current, [id]: url }));
+        completed++;
+        report(index, playlist[index].file.size, true);
+      }
+      await upload(0, 3);
       sessionStorage.setItem('hearu-session', JSON.stringify(next));
-      window.history.replaceState(null, '', roomInviteUrl(next.code));
-      setUploadProgress({ done: 1, total: selected.length });
+      const location = new URL(window.location.href);
+      location.searchParams.set('room', next.code);
+      window.history.replaceState(null, '', location);
+      sessionRef.current = next;
+      setPayload(null); payloadRef.current = null;
+      setInviteCode(next.code); setSession(next); setScreen('room');
+      setLocalPlayerOpen(false);
 
       let failed = 0;
-      let completed = 1;
-      let cursor = 1;
-      async function uploadWorker() {
-        while (cursor < selected.length) {
-          const index = cursor;
-          cursor += 1;
-          const track = selected[index];
-          try {
-            await uploadSelectedTrack(next, track, index);
-          } catch {
-            failed += 1;
-          }
-          completed += 1;
-          setUploadProgress({ done: completed, total: selected.length });
-        }
-      }
-      await Promise.all(Array.from({ length: Math.min(4, selected.length - 1) }, () => uploadWorker()));
-
-      localAudioRef.current?.removeAttribute('src');
-      localAudioRef.current?.load();
-      previewUrls.current.forEach((url) => URL.revokeObjectURL(url));
-      previewUrls.current.clear();
-      setSelected([]);
-      setLocalPlayerOpen(false); setLocalTrackIndex(0); setLocalPosition(0); setLocalDuration(0); setLocalIsPlaying(false); setLocalPlayRequest(0);
+      await mapConcurrent(playlist.slice(1), 2, async (_, index) => {
+        controller.signal.throwIfAborted();
+        try { await upload(index + 1, 2); }
+        catch (cause) { if (controller.signal.aborted) throw cause; failed++; }
+      });
+      controller.signal.throwIfAborted();
       setRoomNotice(failed ? `${failed} ${failed === 1 ? 'song' : 'songs'} could not be uploaded. The rest are ready.` : '');
-      setInviteCode(next.code); setSession(next); setScreen('room');
-    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Room creation failed.'); }
-    finally { setBusy(false); setUploadProgress(null); }
+    } catch (cause) { if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : 'Room creation failed.'); }
+    finally {
+      if (uploadController.current === controller) { uploadController.current = null; setBusy(false); setUploadProgress(null); }
+    }
   }
 
   async function joinRoom(code: string, displayName: string) {
@@ -1164,6 +1310,11 @@ export default function Home({ standalone = false }: { standalone?: boolean } = 
   }
 
   async function signOut() {
+    uploadController.current?.abort();
+    metadataController.current?.abort();
+    queuedPlayback.current = null;
+    ++playbackRevision.current;
+    sessionRef.current = null;
     audioRef.current?.pause();
     localAudioRef.current?.pause();
     localAudioRef.current?.removeAttribute('src');
@@ -1183,28 +1334,63 @@ export default function Home({ standalone = false }: { standalone?: boolean } = 
   }
 
   async function updatePlayback(isPlaying: boolean, nextPosition: number, trackId?: string) {
-    if (!session || !payload) return;
-    const response = await fetch(`/api/rooms/${session.code}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.hostToken ?? ''}`, 'X-Member-Id': session.memberId },
-      body: JSON.stringify({ isPlaying, position: nextPosition, trackId }),
-    });
-    if (response.ok) await readRoom();
+    const current = payloadRef.current;
+    const activeSession = sessionRef.current;
+    if (!activeSession || !current || (activeSession.role !== 'host' && current.room.hostOnly)) return;
+    const track = current.tracks.find((item) => item.id === (trackId || current.room.currentTrackId));
+    if (!track) return;
+    const intent = { isPlaying, position: nextPosition, trackId: track.id };
+    const optimistic = { ...current, room: { ...current.room, isPlaying, position: nextPosition, currentTrackId: track.id, trackName: track.name, trackType: track.type, trackSize: track.size, duration: track.duration } };
+    payloadRef.current = optimistic;
+    setPayload(optimistic);
+    queuedPlayback.current = intent;
+    ++playbackRevision.current;
+    if (playbackSending.current) return;
+    playbackSending.current = true;
+    // Serialize requests and collapse intermediate taps/seeks. Older replies can
+    // never replace the newest intent, and polling cannot undo a pending tap.
+    try {
+      while (queuedPlayback.current && sessionRef.current?.code === activeSession.code) {
+        const outgoing = queuedPlayback.current;
+        queuedPlayback.current = null;
+        const revision = playbackRevision.current;
+        const response = await fetch(`/api/rooms/${activeSession.code}`, {
+          method: 'PATCH', signal: AbortSignal.timeout(15000),
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${activeSession.hostToken ?? ''}`, 'X-Member-Id': activeSession.memberId },
+          body: JSON.stringify(outgoing),
+        });
+        const result = await readApiResult<ApiResult & { room?: RoomState }>(response, 'Playback could not be synced.');
+        if (!response.ok || !result.room) throw new Error(result.error || 'Playback could not be synced.');
+        if (revision === playbackRevision.current && sessionRef.current?.code === activeSession.code && payloadRef.current) {
+          const updated: RoomPayload = { ...payloadRef.current, room: result.room };
+          payloadRef.current = updated;
+          setPayload(updated);
+          setRoomNotice('');
+        }
+      }
+    } catch {
+      queuedPlayback.current = null;
+      playbackNeedsRecovery.current = true;
+      if (sessionRef.current?.code === activeSession.code) setRoomNotice('Playback could not sync. Check your connection and try again.');
+    } finally { playbackSending.current = false; }
   }
 
   async function togglePlayback() {
-    if (!payload) return;
+    const current = payloadRef.current;
+    if (!current) return;
     const audio = audioRef.current;
     if (!audio) return;
-    const nextPlaying = !payload.room.isPlaying;
-    if (nextPlaying) { try { await audio.play(); setNeedsGesture(false); } catch { setNeedsGesture(true); } } else audio.pause();
-    await updatePlayback(nextPlaying, audio.currentTime);
+    const nextPlaying = !current.room.isPlaying;
+    void updatePlayback(nextPlaying, audio.currentTime);
+    const revision = playbackRevision.current;
+    if (nextPlaying) { void audio.play().then(() => { if (revision === playbackRevision.current) setNeedsGesture(false); }).catch(() => { if (revision === playbackRevision.current) setNeedsGesture(true); }); }
+    else { audio.pause(); setNeedsGesture(false); }
   }
 
   async function seek(value: number) {
-    if (!payload) return;
+    if (!payloadRef.current) return;
     if (audioRef.current) audioRef.current.currentTime = value;
-    setPosition(value); await updatePlayback(payload.room.isPlaying, value);
+    await updatePlayback(payloadRef.current.room.isPlaying, value);
   }
 
   async function selectRoomTrack(trackId: string) {
@@ -1227,6 +1413,14 @@ export default function Home({ standalone = false }: { standalone?: boolean } = 
   }
 
   function leaveRoom() {
+    uploadController.current?.abort();
+    sessionRef.current = null;
+    payloadRef.current = null;
+    queuedPlayback.current = null;
+    ++playbackRevision.current;
+    hostUrls.current.forEach((url) => URL.revokeObjectURL(url));
+    hostUrls.current.clear();
+    setHostSources({});
     audioRef.current?.pause(); sessionStorage.removeItem('hearu-session');
     window.history.replaceState(null, '', window.location.pathname);
     setInviteCode(''); setRoomNotice(''); setSession(null); setPayload(null); setScreen('home');
@@ -1270,14 +1464,6 @@ export default function Home({ standalone = false }: { standalone?: boolean } = 
     setVolume(value); if (audioRef.current) audioRef.current.volume = value / 100;
   }
 
-  function pointerPosition(event: ReactPointerEvent<HTMLDivElement>) {
-    const bounds = event.currentTarget.getBoundingClientRect(); const cellWidth = (bounds.width - 8) / screenLabels.length;
-    return Math.max(0, Math.min(screenLabels.length - 1, (event.clientX - bounds.left - 4 - cellWidth / 2) / cellWidth));
-  }
-  function startDragging(event: ReactPointerEvent<HTMLDivElement>) { event.currentTarget.setPointerCapture(event.pointerId); dragMoved.current = false; setDragPosition(pointerPosition(event)); }
-  function moveLens(event: ReactPointerEvent<HTMLDivElement>) { if (!event.currentTarget.hasPointerCapture(event.pointerId)) return; const next = pointerPosition(event); if (Math.abs(next - activeTab) > .08) dragMoved.current = true; setDragPosition(next); }
-  function finishDragging(event: ReactPointerEvent<HTMLDivElement>) { if (!event.currentTarget.hasPointerCapture(event.pointerId)) return; const target = Math.round(pointerPosition(event)); event.currentTarget.releasePointerCapture(event.pointerId); setDragPosition(null); if (screenLabels[target].id === 'room' && !session) setJoinOpen(true); else setScreen(screenLabels[target].id); }
-
   if (authLoading) {
     return <AppSurface standalone={standalone}><div className="phone-screen"><section className="screen centered-state"><Loader2 className="spin" /><h2>Opening HearU…</h2></section></div></AppSurface>;
   }
@@ -1293,7 +1479,7 @@ export default function Home({ standalone = false }: { standalone?: boolean } = 
     </>}>
         <div className="phone-screen">
           {screen === 'home' && <HomeScreen session={session} user={authUser} goTo={setScreen} openJoin={() => setJoinOpen(true)} openAccount={() => setAccountOpen(true)} />}
-          {screen === 'library' && <LibraryScreen selected={selected} goTo={setScreen} error={error} source={{
+          {screen === 'library' && <LibraryScreen audioRef={localAudioRef} selected={selected} goTo={setScreen} error={error} source={{
             scanning,
             message: scanMessage,
             folderPickerAvailable,
@@ -1319,24 +1505,20 @@ export default function Home({ standalone = false }: { standalone?: boolean } = 
             chooseFiles,
             scanFolder: () => { void scanLocalFolder(); },
           }} />}
-          {screen === 'room' && <RoomScreen session={session} payload={payload} audioRef={audioRef} position={position} volume={volume} needsGesture={needsGesture} inviteStatus={inviteStatus} notice={roomNotice} onLeave={leaveRoom} onToggle={togglePlayback} onSeek={seek} onVolume={setAudioVolume} onCopyInvite={() => { void copyInvite(); }} onShareInvite={() => { void shareInvite(); }} onSelectTrack={(trackId) => { void selectRoomTrack(trackId); }} onEnded={() => { void handleTrackEnded(); }} onReact={react} onSync={() => payload && void syncAudio(payload.room, true)} />}
+          {screen === 'room' && <RoomScreen session={session} payload={payload} audioRef={audioRef} localSource={payload ? hostSources[payload.room.currentTrackId] : undefined} uploadProgress={uploadProgress} volume={volume} needsGesture={needsGesture} inviteStatus={inviteStatus} notice={roomNotice} onLeave={leaveRoom} onToggle={togglePlayback} onSeek={seek} onVolume={setAudioVolume} onCopyInvite={() => { void copyInvite(); }} onShareInvite={() => { void shareInvite(); }} onSelectTrack={(trackId) => { void selectRoomTrack(trackId); }} onEnded={() => { void handleTrackEnded(); }} onReact={react} onSync={() => payload && void syncAudio(payload.room, true)} />}
         </div>
         <audio
           ref={localAudioRef}
           className="sr-only"
           src={localTrack?.previewUrl}
           preload="metadata"
-          onTimeUpdate={(event) => setLocalPosition(event.currentTarget.currentTime)}
           onLoadedMetadata={(event) => setLocalDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
           onDurationChange={(event) => setLocalDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
-          onPlay={() => setLocalIsPlaying(true)}
-          onPause={() => setLocalIsPlaying(false)}
+          onPlay={() => { if (localPlayIntent.current) setLocalIsPlaying(true); }}
+          onPause={() => { if (!localPlayIntent.current) setLocalIsPlaying(false); }}
           onEnded={finishLocalTrack}
         />
-        <nav className="nav-dock" aria-label="App navigation"><div className={`ios-tabbar ${dragPosition !== null ? 'dragging' : ''}`} onPointerDown={startDragging} onPointerMove={moveLens} onPointerUp={finishDragging} onPointerCancel={() => setDragPosition(null)}>
-          <span className="tab-slider" style={{ transform: `translateX(${(dragPosition ?? activeTab) * 100}%)` }} />
-          {screenLabels.map(({ id, label, icon: Icon }, index) => <button key={id} className={visibleTab === index ? 'active' : ''} onClick={(event) => { if (dragMoved.current) { event.preventDefault(); return; } if (id === 'room' && !session) setJoinOpen(true); else setScreen(id); }} onKeyDown={() => { dragMoved.current = false; }} aria-label={label}><Icon /><span>{label}</span></button>)}
-        </div></nav>
+        <GlassNavigation screen={screen} navigate={navigate} />
     </AppSurface>
   );
 }

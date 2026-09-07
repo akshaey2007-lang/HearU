@@ -13,6 +13,7 @@
     "start": "wrangler dev --config dist/server/wrangler.json",
     "db:generate": "drizzle-kit generate",
     "lint": "oxlint",
+    "test:performance": "node --experimental-strip-types --test tests/client-transfer.test.mjs",
     "format": "oxfmt"
   },
   "dependencies": {

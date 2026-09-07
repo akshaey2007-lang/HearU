@@ -44,7 +44,7 @@ async function post(request: NextRequest, context: Context) {
     }
     const requestedPosition = Number(form.get('position'));
     const position = Number.isInteger(requestedPosition) ? requestedPosition : tracks.length;
-    if (position < 1 || position >= 250 || tracks.some((track) => track.position === position)) {
+    if (position < 0 || position >= 250 || tracks.some((track) => track.position === position)) {
       return NextResponse.json({ error: 'That playlist position is unavailable.' }, { status: 409 });
     }
 

@@ -9,6 +9,8 @@ on:
       - "android-app/**"
       - "app/**"
       - "components/**"
+      - "lib/client-transfer.ts"
+      - "tests/**"
       - "github-pages/**"
       - "vite.github.config.ts"
       - "package.json"
@@ -36,6 +38,7 @@ jobs:
       - name: Bundle the installed app interface
         run: |
           npm ci
+          npm run test:performance
           npm run build:android
 
       - name: Set up Java 17
@@ -77,12 +80,12 @@ jobs:
         shell: bash
         run: |
           mkdir -p release
-          cp android-app/app/build/outputs/apk/debug/app-debug.apk release/HearU-1.1.apk
+          cp android-app/app/build/outputs/apk/debug/app-debug.apk release/HearU-1.2.apk
 
       - name: Upload the APK
         uses: actions/upload-artifact@v4
         with:
           name: HearU-Android-APK
-          path: release/HearU-1.1.apk
+          path: release/HearU-1.2.apk
           if-no-files-found: error
           retention-days: 30

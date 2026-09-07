@@ -1,3 +1,5 @@
+import { xhrUpload } from '../../lib/client-transfer';
+
 const API_ORIGIN = 'https://hearu-listen-together.akshaey2007.chatgpt.site';
 const SESSION_KEY = 'hearu-github-web-session';
 const nativeFetch = window.fetch.bind(window);
@@ -75,3 +77,10 @@ async function webFetch(input: RequestInfo | URL, init: RequestInit = {}) {
 }
 
 window.fetch = webFetch as typeof window.fetch;
+
+window.hearuUpload = async (url, headers, body, progress, signal, method) => {
+  const send = async (token: string) => xhrUpload(apiTarget(url) || url, { ...headers, 'X-HearU-Session': `Bearer ${token}` }, body, progress, signal, method);
+  let response = await send(await createSession());
+  if (response.status === 401) response = await send(await createSession(true));
+  return response;
+};

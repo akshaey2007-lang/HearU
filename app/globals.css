@@ -858,3 +858,14 @@ html[data-theme="light"] .create-song-empty > svg { color: #086fd9; }
 @media (max-width: 560px) {
   html[data-theme="light"] .site-shell { background: #f2f3f5; }
 }
+
+/* Scrolling rows have independent paint bounds. Keep the moving glass in the dock. */
+.queue-track, .local-track-row { content-visibility: auto; contain-intrinsic-size: auto 58px; }
+.tab-slider { will-change: transform; }
+button, input[type="range"] { touch-action: manipulation; }
+.ios-tabbar { touch-action: none; }
+.play-button { transition: transform 90ms ease; }
+.play-button:active { transform: scale(.94); }
+.upload-status { display: grid; gap: 6px; margin: 12px 0; font-size: 13px; }
+.upload-status progress { width: 100%; height: 5px; accent-color: #a8d538; }
+.upload-status small { opacity: .65; font-size: 12px; }

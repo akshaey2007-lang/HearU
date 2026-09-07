@@ -88,6 +88,14 @@ html[data-hearu-app], html[data-hearu-app] body, html[data-hearu-app] #root {
 .app-surface .local-queue { max-height: none; }
 .app-surface .form-error, .app-surface .room-notice { font-size: .875rem; line-height: 1.5; }
 .app-surface .modal-backdrop { padding: 16px; overflow-y: auto; }
+
+/* Cards scroll over a static background; nested backdrop capture here only adds
+   GPU work. The transparent, refracting navigation remains real glass. */
+.app-surface .screen .liquid-card { backdrop-filter: none; -webkit-backdrop-filter: none; }
+.app-surface .tab-slider, .app-surface .ios-tabbar.dragging .tab-slider {
+  backdrop-filter: blur(5px) saturate(180%);
+  -webkit-backdrop-filter: blur(5px) saturate(180%);
+}
 .app-surface .join-modal, .app-surface .account-modal { max-height: calc(100dvh - 32px); overflow-y: auto; }
 .app-surface .join-modal > p:not(.eyebrow), .app-surface .account-modal > p:not(.eyebrow) { font-size: .9375rem; }
 .app-surface .appearance-setting strong { font-size: .9375rem; }
