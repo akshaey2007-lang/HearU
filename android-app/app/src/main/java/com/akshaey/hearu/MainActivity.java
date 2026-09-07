@@ -5,33 +5,55 @@ import android.app.Activity;
 import android.content.ClipData;
 import android.content.Intent;
 import android.graphics.Bitmap;
+import android.graphics.Insets;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.view.View;
+import android.view.WindowInsets;
 import android.webkit.DownloadListener;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.ProgressBar;
 import android.widget.Toast;
 
+import androidx.webkit.WebViewAssetLoader;
+
 public class MainActivity extends Activity {
-    private static final String APP_URL = "https://akshaey2007-lang.github.io/HearU/";
+    private static final String APP_URL = "https://akshaey2007-lang.github.io/HearU/_android/android.html";
     private static final String APP_HOST = "akshaey2007-lang.github.io";
     private static final int FILE_CHOOSER_REQUEST = 1001;
 
     private WebView webView;
     private ProgressBar progressBar;
     private ValueCallback<Uri[]> fileChooserCallback;
+    private WebViewAssetLoader assetLoader;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+
+        // Keep controls clear of the real system bars, cutouts, and keyboard.
+        View root = findViewById(R.id.app_root);
+        root.setOnApplyWindowInsetsListener((view, insets) -> {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                Insets safeArea = insets.getInsets(WindowInsets.Type.systemBars()
+                        | WindowInsets.Type.displayCutout() | WindowInsets.Type.ime());
+                view.setPadding(safeArea.left, safeArea.top, safeArea.right, safeArea.bottom);
+            } else {
+                view.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(),
+                        insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom());
+            }
+            return insets;
+        });
+        root.requestApplyInsets();
 
         webView = findViewById(R.id.web_view);
         progressBar = findViewById(R.id.progress_bar);
@@ -46,6 +68,11 @@ public class MainActivity extends Activity {
 
     @SuppressLint("SetJavaScriptEnabled")
     private void configureWebView() {
+        WebViewAssetLoader.AssetsPathHandler assets = new WebViewAssetLoader.AssetsPathHandler(this);
+        assetLoader = new WebViewAssetLoader.Builder()
+                .setDomain(APP_HOST)
+                .addPathHandler("/HearU/_android/", path -> assets.handle("web/" + path))
+                .build();
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
@@ -55,6 +82,8 @@ public class MainActivity extends Activity {
         settings.setAllowFileAccess(false);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         settings.setCacheMode(WebSettings.LOAD_DEFAULT);
+        settings.setUseWideViewPort(true);
+        settings.setLoadWithOverviewMode(true);
         settings.setBuiltInZoomControls(false);
         settings.setDisplayZoomControls(false);
         settings.setSupportZoom(false);
@@ -166,13 +195,28 @@ public class MainActivity extends Activity {
             Uri uri = request.getUrl();
             String scheme = uri.getScheme();
 
-            if ("file".equalsIgnoreCase(scheme)
-                    || ("https".equalsIgnoreCase(scheme) && APP_HOST.equalsIgnoreCase(uri.getHost()))) {
+            if ("https".equalsIgnoreCase(scheme) && APP_HOST.equalsIgnoreCase(uri.getHost())
+                    && uri.getPath() != null && uri.getPath().startsWith("/HearU/_android/")) {
                 return false;
+            }
+
+            // A public room invite opens the installed app's bundled view.
+            if ("https".equalsIgnoreCase(scheme) && APP_HOST.equalsIgnoreCase(uri.getHost())
+                    && "/HearU/".equals(uri.getPath())) {
+                Uri.Builder target = Uri.parse(APP_URL).buildUpon();
+                String room = uri.getQueryParameter("room");
+                if (room != null) target.appendQueryParameter("room", room);
+                view.loadUrl(target.build().toString());
+                return true;
             }
 
             openExternally(uri);
             return true;
+        }
+
+        @Override
+        public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+            return assetLoader.shouldInterceptRequest(request.getUrl());
         }
 
         @Override

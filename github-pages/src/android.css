@@ -1,0 +1,106 @@
+/* Installed-app layout: the Android window is the only device frame. */
+html[data-hearu-app], html[data-hearu-app] body, html[data-hearu-app] #root {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  overflow: hidden;
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+.app-surface {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--background);
+  color: var(--foreground);
+}
+
+.app-surface .phone-screen { width: 100%; height: 100%; border-radius: 0; }
+.app-surface .screen {
+  padding: 20px 20px 112px;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+}
+.app-surface .nav-dock {
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  height: 72px;
+  max-width: 620px;
+  margin-inline: auto;
+}
+.app-surface .ios-tabbar button { font-size: .75rem; gap: 4px; }
+.app-surface .ios-tabbar button svg { width: 23px; height: 23px; }
+.app-surface .brand { font-size: 1.3rem; }
+.app-surface .brand-mark { width: 38px; height: 38px; }
+.app-surface .profile-button, .app-surface .icon-button { width: 44px; height: 44px; }
+.app-surface .profile-photo-sm { width: 38px; height: 38px; font-size: .875rem; }
+.app-surface .icon-button svg { width: 20px; height: 20px; }
+.app-surface .sub-header { grid-template-columns: 44px 1fr 44px; font-size: .875rem; }
+.app-surface .intro-copy, .app-surface .page-title { margin-top: 32px; }
+.app-surface .intro-copy h1, .app-surface .page-title h1 { font-size: clamp(2.25rem, 9vw, 3rem); }
+.app-surface .intro-copy > p:last-child { font-size: 1rem; line-height: 1.5; }
+.app-surface .eyebrow { font-size: .75rem; }
+.app-surface .action-card { min-height: 164px; padding: 16px; }
+.app-surface .action-card strong { font-size: 1rem; }
+.app-surface .action-card small { font-size: .8125rem; line-height: 1.4; }
+.app-surface .action-icon { width: 40px; height: 40px; }
+.app-surface .section-heading > div, .app-surface .queue-heading { font-size: .9375rem; }
+.app-surface .section-heading button { min-height: 44px; font-size: .875rem; }
+.app-surface .how-card { padding: 20px 12px; gap: 7px; }
+.app-surface .how-card > span b { font-size: .8125rem; }
+.app-surface .how-card > span small { font-size: .75rem; }
+.app-surface .privacy-note { font-size: .8125rem; line-height: 1.5; }
+.app-surface .search-field { height: 48px; }
+.app-surface .search-field input, .app-surface .join-name-input { font-size: 1rem; }
+.app-surface .folder-scan-button strong { font-size: 1rem; }
+.app-surface .folder-scan-button small, .app-surface .choose-files-button { font-size: .875rem; }
+.app-surface .choose-files-button { min-height: 44px; }
+.app-surface .compact-source-picker { grid-template-columns: 1fr; }
+.app-surface .compact-source-picker .folder-scan-button small { white-space: normal; }
+.app-surface .local-library-list { max-height: none; overflow: visible; }
+.app-surface .track-row, .app-surface .queue-track, .app-surface .history-row { min-height: 64px; }
+.app-surface .history-copy strong, .app-surface .queue-track strong { font-size: .9375rem; }
+.app-surface .history-copy small, .app-surface .queue-track small,
+.app-surface .queue-track time, .app-surface .track-count, .app-surface .track-row .duration,
+.app-surface .queue-heading small, .app-surface .selection-more { font-size: .75rem; }
+.app-surface .empty-music strong, .app-surface .create-song-empty strong { font-size: 1rem; }
+.app-surface .empty-music p, .app-surface .create-song-empty small { font-size: .875rem; line-height: 1.5; }
+.app-surface .create-button, .app-surface .join-button, .app-surface .local-play-button { min-height: 52px; height: auto; font-size: .9375rem; }
+.app-surface .selection-row strong, .app-surface .selected-track strong { font-size: .9375rem; }
+.app-surface .selection-row > span, .app-surface .selection-row > small,
+.app-surface .selected-track small, .app-surface .selected-track span { font-size: .75rem; }
+.app-surface .room-name-field { font-size: .75rem; }
+.app-surface .room-name-field input { font-size: 1.125rem; }
+.app-surface .setting-row strong { font-size: .9375rem; }
+.app-surface .setting-row small { font-size: .75rem; line-height: 1.4; }
+.app-surface .artwork-lg { width: min(75vw, 360px); height: auto; aspect-ratio: 1; }
+.app-surface .local-player-art { margin-top: 24px; }
+.app-surface .track-title-row p { font-size: 1.125rem; }
+.app-surface .track-title-row span, .app-surface .room-role { font-size: .8125rem; }
+.app-surface .time-row, .app-surface .local-device-note, .app-surface .host-control-note { font-size: .8125rem; }
+.app-surface .local-seek, .app-surface .seek-slider { min-height: 28px; }
+.app-surface .local-queue { max-height: none; }
+.app-surface .form-error, .app-surface .room-notice { font-size: .875rem; line-height: 1.5; }
+.app-surface .modal-backdrop { padding: 16px; overflow-y: auto; }
+.app-surface .join-modal, .app-surface .account-modal { max-height: calc(100dvh - 32px); overflow-y: auto; }
+.app-surface .join-modal > p:not(.eyebrow), .app-surface .account-modal > p:not(.eyebrow) { font-size: .9375rem; }
+.app-surface .appearance-setting strong { font-size: .9375rem; }
+.app-surface .appearance-setting small { font-size: .8125rem; }
+.app-surface .signout-button { min-height: 44px; font-size: .9375rem; }
+
+@media (min-width: 700px) {
+  .app-surface .screen { padding-inline: max(24px, calc((100vw - 720px) / 2)); }
+  .app-surface .intro-copy { margin-top: 24px; }
+}
+
+@media (max-height: 520px) {
+  .app-surface .screen { padding-top: 12px; }
+  .app-surface .intro-copy, .app-surface .page-title { margin-top: 16px; }
+  .app-surface .artwork-lg { width: min(40vh, 240px); }
+}

@@ -34,6 +34,10 @@ yarn-error.log*
 next-env.d.ts
 /dist/
 /dist-github/
+/dist-android/
+/android-app/.gradle/
+/android-app/local.properties
+/android-app/app/build/
 /.wrangler/
 /outputs/
 /work/

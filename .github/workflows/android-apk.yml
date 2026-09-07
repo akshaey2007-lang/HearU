@@ -7,6 +7,12 @@ on:
       - main
     paths:
       - "android-app/**"
+      - "app/**"
+      - "components/**"
+      - "github-pages/**"
+      - "vite.github.config.ts"
+      - "package.json"
+      - "package-lock.json"
       - ".github/workflows/android-apk.yml"
 
 permissions:
@@ -15,10 +21,22 @@ permissions:
 jobs:
   build-apk:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
 
     steps:
       - name: Check out source
         uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Bundle the installed app interface
+        run: |
+          npm ci
+          npm run build:android
 
       - name: Set up Java 17
         uses: actions/setup-java@v5
@@ -37,22 +55,34 @@ jobs:
 
       - name: Build and lint the APK
         working-directory: android-app
-        run: gradle --no-daemon --stacktrace --console=plain :app:assembleDebug :app:lintDebug
+        run: gradle --no-daemon --stacktrace --console=plain :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug
 
       - name: Verify the APK signature
         shell: bash
         run: '"$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose android-app/app/build/outputs/apk/debug/app-debug.apk'
 
+      - name: Verify the installed app on Android
+        shell: bash
+        run: bash android-app/verify-emulator.sh
+
+      - name: Upload Android verification
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HearU-Android-Verification
+          path: android-verification/
+          retention-days: 14
+
       - name: Prepare the APK artifact
         shell: bash
         run: |
           mkdir -p release
-          cp android-app/app/build/outputs/apk/debug/app-debug.apk release/HearU-1.0-debug.apk
+          cp android-app/app/build/outputs/apk/debug/app-debug.apk release/HearU-1.1.apk
 
       - name: Upload the APK
         uses: actions/upload-artifact@v4
         with:
           name: HearU-Android-APK
-          path: release/HearU-1.0-debug.apk
+          path: release/HearU-1.1.apk
           if-no-files-found: error
           retention-days: 30

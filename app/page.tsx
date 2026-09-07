@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from 'react';
+import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject, type ReactNode } from 'react';
 import {
   ArrowLeft,
   AudioLines,
@@ -784,9 +784,16 @@ function JoinOverlay({ defaultName, initialCode, close, join }: { defaultName: s
   );
 }
 
-export default function Home() {
-  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
-  const [authLoading, setAuthLoading] = useState(true);
+const LOCAL_APP_USER: AuthUser = { id: 'guest:local-device', name: 'Listener', email: '', picture: null };
+
+function AppSurface({ standalone, children, overlays }: { standalone: boolean; children: ReactNode; overlays?: ReactNode }) {
+  if (standalone) return <main className="app-surface">{children}{overlays}</main>;
+  return <main className="site-shell"><div className="phone-stage"><div className="phone-frame"><div className="dynamic-island" aria-hidden="true" />{children}</div></div>{overlays}</main>;
+}
+
+export default function Home({ standalone = false }: { standalone?: boolean } = {}) {
+  const [authUser, setAuthUser] = useState<AuthUser | null>(standalone ? LOCAL_APP_USER : null);
+  const [authLoading, setAuthLoading] = useState(!standalone);
   const [accountOpen, setAccountOpen] = useState(false);
   const [theme, setTheme] = useState<ThemeMode>(() => {
     if (typeof window === 'undefined') return 'dark';
@@ -863,11 +870,11 @@ export default function Home() {
     let active = true;
     void fetch('/api/auth/me', { cache: 'no-store' })
       .then(async (response) => response.ok ? response.json() as Promise<{ user: AuthUser }> : { user: null })
-      .then(({ user }) => { if (active) setAuthUser(user); })
+      .then(({ user }) => { if (active) setAuthUser(user ?? (standalone ? LOCAL_APP_USER : null)); })
       .catch(() => undefined)
       .finally(() => { if (active) setAuthLoading(false); });
     return () => { active = false; };
-  }, []);
+  }, [standalone]);
 
   const handleSignedIn = useCallback((user: AuthUser) => {
     setAuthUser(user);
@@ -1272,16 +1279,18 @@ export default function Home() {
   function finishDragging(event: ReactPointerEvent<HTMLDivElement>) { if (!event.currentTarget.hasPointerCapture(event.pointerId)) return; const target = Math.round(pointerPosition(event)); event.currentTarget.releasePointerCapture(event.pointerId); setDragPosition(null); if (screenLabels[target].id === 'room' && !session) setJoinOpen(true); else setScreen(screenLabels[target].id); }
 
   if (authLoading) {
-    return <main className="site-shell"><div className="phone-stage"><div className="phone-frame"><div className="phone-screen"><section className="screen centered-state"><Loader2 className="spin" /><h2>Opening HearU…</h2></section></div></div></div></main>;
+    return <AppSurface standalone={standalone}><div className="phone-screen"><section className="screen centered-state"><Loader2 className="spin" /><h2>Opening HearU…</h2></section></div></AppSurface>;
   }
 
   if (!authUser) {
-    return <main className="site-shell"><div className="phone-stage"><div className="phone-frame"><div className="dynamic-island" aria-hidden="true" /><div className="phone-screen"><LoginScreen onSignedIn={handleSignedIn} inviteCode={inviteCode} /></div></div></div></main>;
+    return <AppSurface standalone={standalone}><div className="phone-screen"><LoginScreen onSignedIn={handleSignedIn} inviteCode={inviteCode} /></div></AppSurface>;
   }
 
   return (
-    <main className="site-shell">
-      <div className="phone-stage"><div className="phone-frame"><div className="dynamic-island" aria-hidden="true" />
+    <AppSurface standalone={standalone} overlays={<>
+      {joinOpen && <JoinOverlay defaultName={authUser.name.split(' ')[0]} initialCode={inviteCode} close={() => setJoinOpen(false)} join={joinRoom} />}
+      {accountOpen && <AccountOverlay user={authUser} close={() => setAccountOpen(false)} signOut={() => { void signOut(); }} theme={theme} setTheme={setTheme} />}
+    </>}>
         <div className="phone-screen">
           {screen === 'home' && <HomeScreen session={session} user={authUser} goTo={setScreen} openJoin={() => setJoinOpen(true)} openAccount={() => setAccountOpen(true)} />}
           {screen === 'library' && <LibraryScreen selected={selected} goTo={setScreen} error={error} source={{
@@ -1328,9 +1337,6 @@ export default function Home() {
           <span className="tab-slider" style={{ transform: `translateX(${(dragPosition ?? activeTab) * 100}%)` }} />
           {screenLabels.map(({ id, label, icon: Icon }, index) => <button key={id} className={visibleTab === index ? 'active' : ''} onClick={(event) => { if (dragMoved.current) { event.preventDefault(); return; } if (id === 'room' && !session) setJoinOpen(true); else setScreen(id); }} onKeyDown={() => { dragMoved.current = false; }} aria-label={label}><Icon /><span>{label}</span></button>)}
         </div></nav>
-      </div></div>
-      {joinOpen && <JoinOverlay defaultName={authUser.name.split(' ')[0]} initialCode={inviteCode} close={() => setJoinOpen(false)} join={joinRoom} />}
-      {accountOpen && <AccountOverlay user={authUser} close={() => setAccountOpen(false)} signOut={() => { void signOut(); }} theme={theme} setTheme={setTheme} />}
-    </main>
+    </AppSurface>
   );
 }
