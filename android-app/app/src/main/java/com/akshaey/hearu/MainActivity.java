@@ -9,7 +9,6 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.view.View;
 import android.webkit.DownloadListener;
-import android.webkit.SafeBrowsingResponse;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
@@ -183,16 +182,6 @@ public class MainActivity extends Activity {
             }
         }
 
-        @Override
-        public void onSafeBrowsingHit(
-                WebView view,
-                WebResourceRequest request,
-                int threatType,
-                SafeBrowsingResponse callback
-        ) {
-            callback.backToSafety(true);
-            Toast.makeText(MainActivity.this, R.string.unsafe_page_blocked, Toast.LENGTH_LONG).show();
-        }
     }
 
     private final class HearUWebChromeClient extends WebChromeClient {
