@@ -4,6 +4,8 @@ set -euo pipefail
 sdk="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
 avd="$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager"
 adb="$ANDROID_HOME/platform-tools/adb"
+export ANDROID_AVD_HOME="$RUNNER_TEMP/hearu-avd"
+mkdir -p "$ANDROID_AVD_HOME"
 
 "$sdk" "system-images;android-35;google_apis;x86_64" "emulator" "platform-tools"
 echo no | "$avd" create avd --name hearu-test --package "system-images;android-35;google_apis;x86_64" --device pixel_2
