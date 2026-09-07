@@ -58,8 +58,9 @@ public class AppLayoutTest {
 
     private void tap(String selector) throws Exception {
         waitFor("!!document.querySelector(" + JSONObject.quote(selector) + ")");
+        awaitPaint();
         String position = evaluate("JSON.stringify((() => { const el=document.querySelector("
-                + JSONObject.quote(selector) + "); el.scrollIntoView({block:'nearest'});"
+                + JSONObject.quote(selector) + "); el.scrollIntoView({block:'center'});"
                 + "const r=el.getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2,w:innerWidth};})())");
         JSONObject point = new JSONObject(new JSONTokener(position).nextValue().toString());
         int[] offset = new int[2];
@@ -77,6 +78,16 @@ public class AppLayoutTest {
         InstrumentationRegistry.getInstrumentation().waitForIdleSync();
     }
 
+    private void awaitPaint() throws Exception {
+        CountDownLatch painted = new CountDownLatch(1);
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(() ->
+                webView().postVisualStateCallback(1, new WebView.VisualStateCallback() {
+                    @Override public void onComplete(long requestId) { painted.countDown(); }
+                }));
+        assertTrue("The app did not paint", painted.await(15, TimeUnit.SECONDS));
+        SystemClock.sleep(500);
+    }
+
     private void assertFullScreen() throws Exception {
         assertEquals("No mock phone or notch may be rendered", "true", evaluate(
                 "!document.querySelector('.phone-frame,.dynamic-island,.phone-stage')"));
@@ -90,6 +101,7 @@ public class AppLayoutTest {
     }
 
     private void screenshot(String name) throws Exception {
+        awaitPaint();
         Bitmap bitmap = InstrumentationRegistry.getInstrumentation().getUiAutomation().takeScreenshot();
         assertTrue("Android screenshot is available", bitmap != null);
         File directory = activityRule.getActivity().getExternalFilesDir("verification");
@@ -108,7 +120,7 @@ public class AppLayoutTest {
         screenshot("portrait-dark");
 
         tap("button[aria-label='Open account']");
-        tap("button[aria-label='Use dark mode']");
+        tap("[role='switch']");
         waitFor("document.documentElement.dataset.theme === 'light'");
         tap("button[aria-label='Close']");
         assertFullScreen();
