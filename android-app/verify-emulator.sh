@@ -11,10 +11,12 @@ mkdir -p "$ANDROID_AVD_HOME"
 echo no | "$avd" create avd --name hearu-test --package "system-images;android-35;google_apis;x86_64" --device pixel_2
 sudo chmod 666 /dev/kvm
 mkdir -p android-verification
-"$ANDROID_HOME/emulator/emulator" -avd hearu-test -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader -feature -Vulkan -cores 2 -memory 2048 > "$RUNNER_TEMP/hearu-emulator.log" 2>&1 &
+"$ANDROID_HOME/emulator/emulator" -avd hearu-test -no-window -no-audio -no-boot-anim -no-snapshot -gpu swangle -feature -Vulkan -cores 2 -memory 3072 > "$RUNNER_TEMP/hearu-emulator.log" 2>&1 &
 emulator_pid=$!
+logcat_pid=''
 finish() {
   cp "$RUNNER_TEMP/hearu-emulator.log" android-verification/emulator.log || true
+  if [[ -n "$logcat_pid" ]]; then kill "$logcat_pid" 2>/dev/null || true; fi
   kill "$emulator_pid" 2>/dev/null || true
 }
 trap finish EXIT
@@ -47,8 +49,14 @@ if [[ "$booted" != "true" ]]; then cat "$RUNNER_TEMP/hearu-emulator.log"; exit 1
 "$adb" shell svc wifi disable
 "$adb" shell svc data disable
 "$adb" logcat -c
-"$adb" shell am instrument -w com.akshaey.hearu.test/androidx.test.runner.AndroidJUnitRunner | tee "$RUNNER_TEMP/hearu-instrumentation.txt"
-"$adb" pull /sdcard/Android/data/com.akshaey.hearu/files/verification android-verification/ || true
-"$adb" logcat -d > android-verification/logcat.txt
+"$adb" logcat -v threadtime > android-verification/logcat.txt 2>&1 &
+logcat_pid=$!
+# Retain diagnostics even if adb or the emulator exits before JUnit finishes.
+set +e
+timeout 240 "$adb" shell am instrument -w com.akshaey.hearu.test/androidx.test.runner.AndroidJUnitRunner | tee "$RUNNER_TEMP/hearu-instrumentation.txt"
+instrumentation_status=${PIPESTATUS[0]}
+set -e
+timeout 20 "$adb" pull /sdcard/Android/data/com.akshaey.hearu/files/verification android-verification/ || true
 cp "$RUNNER_TEMP/hearu-instrumentation.txt" android-verification/results.txt
+if [[ "$instrumentation_status" != "0" ]]; then exit "$instrumentation_status"; fi
 grep -q 'OK (1 test)' "$RUNNER_TEMP/hearu-instrumentation.txt"

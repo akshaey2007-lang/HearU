@@ -103,6 +103,7 @@ public class AppLayoutTest {
     }
 
     private void screenshot(String name) throws Exception {
+        android.util.Log.i("HearUTest", "Checkpoint: " + name);
         awaitPaint();
         Bitmap bitmap = InstrumentationRegistry.getInstrumentation().getUiAutomation().takeScreenshot();
         assertTrue("Android screenshot is available", bitmap != null);
