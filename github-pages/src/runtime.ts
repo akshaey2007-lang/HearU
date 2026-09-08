@@ -1,4 +1,5 @@
 import { xhrUpload } from '../../lib/client-transfer';
+import { createNativeGoogleAuth } from '../../lib/native-google';
 
 const API_ORIGIN = 'https://hearu-listen-together.akshaey2007.chatgpt.site';
 const SESSION_KEY = 'hearu-github-web-session';
@@ -31,14 +32,16 @@ function clearSession() {
   sessionRequest = null;
 }
 
-async function createSession(force = false) {
-  if (force) clearSession();
+async function createSession(force = false, staleToken?: string) {
+  // A delayed guest request must not replace a newly verified Google session.
+  if (force && (!staleToken || !savedSession() || savedSession() === staleToken)) clearSession();
   const existing = savedSession();
   if (existing) return existing;
   if (!sessionRequest) {
     sessionRequest = nativeFetch(`${API_ORIGIN}/api/auth/guest`, {
       method: 'POST',
       cache: 'no-store',
+      signal: AbortSignal.timeout(15000),
     }).then(async (response) => {
       const result = await response.json() as { token?: string; error?: string };
       if (!response.ok || !result.token) throw new Error(result.error || 'HearU could not start a web session.');
@@ -70,8 +73,9 @@ async function webFetch(input: RequestInfo | URL, init: RequestInit = {}) {
     return nativeFetch(target, { ...init, headers });
   };
 
-  let response = await send(await createSession());
-  if (response.status === 401) response = await send(await createSession(true));
+  const token = await createSession();
+  let response = await send(token);
+  if (response.status === 401) response = await send(await createSession(true, token));
   if (new URL(target).pathname === '/api/auth/me' && (init.method || 'GET').toUpperCase() === 'DELETE') clearSession();
   return response;
 }
@@ -80,7 +84,24 @@ window.fetch = webFetch as typeof window.fetch;
 
 window.hearuUpload = async (url, headers, body, progress, signal, method) => {
   const send = async (token: string) => xhrUpload(apiTarget(url) || url, { ...headers, 'X-HearU-Session': `Bearer ${token}` }, body, progress, signal, method);
-  let response = await send(await createSession());
-  if (response.status === 401) response = await send(await createSession(true));
+  const token = await createSession();
+  let response = await send(token);
+  if (response.status === 401) response = await send(await createSession(true, token));
   return response;
 };
+
+if (window.location.pathname === '/HearU/_android/android.html') {
+  const auth = createNativeGoogleAuth({
+    bridge: window.HearUNative,
+    getSession: () => createSession(),
+    setSession: (token) => { saveSession(token); sessionRequest = Promise.resolve(token); },
+    clearSession,
+    send: (token, body) => nativeFetch(`${API_ORIGIN}/api/auth/android`, {
+      method: 'POST', cache: 'no-store', signal: AbortSignal.timeout(20000),
+      headers: { 'Content-Type': 'application/json', 'X-HearU-Session': `Bearer ${token}` },
+      body: JSON.stringify(body),
+    }),
+  });
+  window.hearuGoogleSignIn = auth.signIn;
+  window.hearuGoogleSignOut = auth.signOut;
+}

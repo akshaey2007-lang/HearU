@@ -39,6 +39,7 @@ jobs:
         run: |
           npm ci
           npm run test:performance
+          node --experimental-strip-types --test tests/android-auth.test.mjs tests/native-google.test.mjs
           npm run build:android
 
       - name: Set up Java 17
@@ -58,7 +59,15 @@ jobs:
 
       - name: Build and lint the APK
         working-directory: android-app
-        run: gradle --no-daemon --stacktrace --console=plain :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug
+        env:
+          HEARU_KEYSTORE_BASE64: ${{ secrets.HEARU_KEYSTORE_BASE64 }}
+          HEARU_KEYSTORE_PASSWORD: ${{ secrets.HEARU_KEYSTORE_PASSWORD }}
+        run: |
+          test -n "$HEARU_KEYSTORE_BASE64" && test -n "$HEARU_KEYSTORE_PASSWORD"
+          export HEARU_KEYSTORE_PATH="$RUNNER_TEMP/hearu-signing.p12"
+          printf '%s' "$HEARU_KEYSTORE_BASE64" | base64 --decode > "$HEARU_KEYSTORE_PATH"
+          trap 'rm -f "$HEARU_KEYSTORE_PATH"' EXIT
+          gradle --no-daemon --stacktrace --console=plain :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug
 
       - name: Verify the APK signature
         shell: bash
@@ -80,12 +89,12 @@ jobs:
         shell: bash
         run: |
           mkdir -p release
-          cp android-app/app/build/outputs/apk/debug/app-debug.apk release/HearU-1.2.apk
+          cp android-app/app/build/outputs/apk/debug/app-debug.apk release/HearU-1.3.apk
 
       - name: Upload the APK
         uses: actions/upload-artifact@v4
         with:
           name: HearU-Android-APK
-          path: release/HearU-1.2.apk
+          path: release/HearU-1.3.apk
           if-no-files-found: error
           retention-days: 30

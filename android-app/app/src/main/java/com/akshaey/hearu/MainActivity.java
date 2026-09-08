@@ -34,6 +34,7 @@ public class MainActivity extends Activity {
     private ProgressBar progressBar;
     private ValueCallback<Uri[]> fileChooserCallback;
     private WebViewAssetLoader assetLoader;
+    private GoogleAuthBridge googleAuth;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -92,6 +93,8 @@ public class MainActivity extends Activity {
         webView.setWebViewClient(new HearUWebViewClient());
         webView.setWebChromeClient(new HearUWebChromeClient());
         webView.setDownloadListener(new ExternalDownloadListener());
+        googleAuth = new GoogleAuthBridge(this, webView);
+        googleAuth.install();
     }
 
     private void openExternally(Uri uri) {
@@ -168,6 +171,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (googleAuth != null) googleAuth.destroy();
         if (fileChooserCallback != null) {
             fileChooserCallback.onReceiveValue(null);
             fileChooserCallback = null;

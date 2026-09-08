@@ -1,5 +1,6 @@
 import { env } from 'cloudflare:workers';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
+import { requireMatchingNonce } from './android-auth';
 
 export const GOOGLE_CLIENT_ID = '922402174418-9vcvmgb1u6al78delh4u9j482ulrtqc2.apps.googleusercontent.com';
 export const AUTH_COOKIE = 'hearu_auth';
@@ -50,12 +51,15 @@ async function hashToken(token: string) {
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
-export async function verifyGoogleCredential(credential: string): Promise<AuthUser> {
+export async function verifyGoogleCredential(credential: string, expectedNonces?: readonly string[]): Promise<AuthUser> {
   const { payload } = await jwtVerify(credential, jwks, {
     audience: configuredClientId(),
     issuer: ['https://accounts.google.com', 'accounts.google.com'],
     algorithms: ['RS256'],
+    requiredClaims: ['sub', 'exp', 'iat', 'email'],
   });
+
+  if (expectedNonces) requireMatchingNonce(payload.nonce, expectedNonces);
 
   if (!payload.sub || typeof payload.email !== 'string' || payload.email_verified !== true) {
     throw new Error('Google account email is not verified');
@@ -122,6 +126,23 @@ export async function deleteUserSession(token: string | undefined) {
   } catch (error) {
     if (!canUseLocalFallback()) throw error;
     sessions().delete(tokenHash);
+  }
+}
+
+// A single conditional delete makes the Android exchange one-use, even across
+// simultaneous requests and different Worker instances.
+export async function consumeUserSession(token: string): Promise<boolean> {
+  const tokenHash = await hashToken(token);
+  const db = bindings().DB;
+  try {
+    if (!db) throw new Error('DB binding unavailable');
+    const result = await db.prepare('DELETE FROM user_sessions WHERE token_hash = ? AND expires_at > ?')
+      .bind(tokenHash, Date.now()).run();
+    return result.meta.changes === 1;
+  } catch (error) {
+    if (!canUseLocalFallback()) throw error;
+    const record = sessions().get(tokenHash);
+    return !!record && record.expiresAt > Date.now() && sessions().delete(tokenHash);
   }
 }
 

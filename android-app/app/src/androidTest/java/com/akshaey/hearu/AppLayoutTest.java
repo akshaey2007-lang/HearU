@@ -123,6 +123,21 @@ public class AppLayoutTest {
         screenshot("portrait-dark");
 
         tap("button[aria-label='Open account']");
+        waitFor("!!document.querySelector('.native-google-button') && typeof HearUNative === 'object'");
+        assertTrue("Only the bundled page is trusted", GoogleAuthBridge.trustedPage("https://akshaey2007-lang.github.io/HearU/_android/android.html?room=ABC"));
+        assertTrue("Other pages must not access native accounts", !GoogleAuthBridge.trustedPage("https://akshaey2007-lang.github.io/HearU/"));
+        assertTrue("Other origins must not access native accounts", !GoogleAuthBridge.trustedPage("https://example.com/HearU/_android/android.html"));
+        // Exercise the actual native bridge with an invalid challenge. No Google
+        // account or network is needed, and no test authentication bypass ships.
+        evaluate("window.hearuAuthReply=null; window.savedAuthHandler=HearUNative.onmessage;"
+                + "HearUNative.onmessage=e=>{window.hearuAuthReply=JSON.parse(e.data);};"
+                + "HearUNative.postMessage(JSON.stringify({id:'bridge-test',action:'signIn',nonce:'invalid'}));");
+        waitFor("hearuAuthReply && hearuAuthReply.id==='bridge-test' && !!hearuAuthReply.error");
+        evaluate("HearUNative.onmessage=window.savedAuthHandler;");
+        screenshot("google-signup");
+        // Offline sign-in reports an error without gating the local player.
+        tap(".native-google-button");
+        waitFor("!!document.querySelector('.account-modal [role=alert]') && !document.querySelector('.native-google-button').disabled");
         tap("[role='switch']");
         waitFor("document.documentElement.dataset.theme === 'light'");
         tap("button[aria-label='Close']");

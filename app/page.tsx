@@ -517,20 +517,38 @@ function LoginScreen({ onSignedIn, inviteCode }: { onSignedIn: (user: AuthUser) 
   );
 }
 
-function AccountOverlay({ user, close, signOut, theme, setTheme }: { user: AuthUser; close: () => void; signOut: () => void; theme: ThemeMode; setTheme: (theme: ThemeMode) => void }) {
+function AccountOverlay({ user, close, signOut, signedIn, theme, setTheme }: { user: AuthUser; close: () => void; signOut: () => void; signedIn: (user: AuthUser) => void; theme: ThemeMode; setTheme: (theme: ThemeMode) => void }) {
   const isWebSession = user.id.startsWith('guest:');
+  const canGoogleSignIn = typeof window !== 'undefined' && !!window.hearuGoogleSignIn;
+  const [busy, setBusy] = useState(false);
+  const [authError, setAuthError] = useState('');
+  async function googleSignIn() {
+    if (busy || !window.hearuGoogleSignIn) return;
+    setBusy(true); setAuthError('');
+    try { signedIn(await window.hearuGoogleSignIn()); }
+    catch (error) { setAuthError(error instanceof Error ? error.message : 'Google sign-in failed. Please try again.'); }
+    finally { setBusy(false); }
+  }
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={close}>
       <div className="account-modal liquid-card" role="dialog" aria-modal="true" aria-labelledby="account-title" onMouseDown={(event) => event.stopPropagation()}>
         <button className="icon-button close-modal" onClick={close} aria-label="Close"><X /></button>
         <ProfileAvatar user={user} size="lg" />
-        <p className="eyebrow">{isWebSession ? 'Web session' : 'Google account'}</p><h2 id="account-title">{user.name}</h2><p>{user.email}</p>
+        <p className="eyebrow">{isWebSession ? (canGoogleSignIn ? 'Local listener' : 'Web session') : 'Google account'}</p><h2 id="account-title">{user.name}</h2><p>{user.email}</p>
+        {isWebSession && canGoogleSignIn && <div className="native-google-account">
+          <button className="native-google-button" disabled={busy} onClick={() => { void googleSignIn(); }}>
+            <img src="/HearU/_android/google-g.png" width={20} height={20} alt="" />
+            {busy ? 'Signing in…' : 'Continue with Google'}
+          </button>
+          <small>Sign up or sign in. Local listening is always available.</small>
+        </div>}
+        {authError && <p className="auth-error" role="alert">{authError}</p>}
         <div className="appearance-setting">
           <span className="appearance-icon">{theme === 'dark' ? <Moon /> : <Sun />}</span>
           <span><strong>Appearance</strong><small>{theme === 'dark' ? 'Dark mode' : 'Light mode'}</small></span>
           <Switch checked={theme === 'dark'} onCheckedChange={(checked) => setTheme(checked ? 'dark' : 'light')} aria-label="Use dark mode" />
         </div>
-        <button className="signout-button" onClick={signOut}>{isWebSession ? 'Reset session' : 'Sign out'}</button>
+        <button className="signout-button" disabled={busy} onClick={signOut}>{isWebSession ? 'Reset session' : 'Sign out'}</button>
       </div>
     </div>
   );
@@ -926,6 +944,7 @@ export default function Home({ standalone = false }: { standalone?: boolean } = 
   const roomReading = useRef(false);
   const localPlayIntent = useRef(false);
   const localPlayRevision = useRef(0);
+  const authRevision = useRef(0);
   const navigate = useStableEvent((target: Screen) => {
     if (target === 'room' && !session) setJoinOpen(true);
     else setScreen(target);
@@ -972,15 +991,17 @@ export default function Home({ standalone = false }: { standalone?: boolean } = 
 
   useEffect(() => {
     let active = true;
+    const revision = authRevision.current;
     void fetch('/api/auth/me', { cache: 'no-store' })
       .then(async (response) => response.ok ? response.json() as Promise<{ user: AuthUser }> : { user: null })
-      .then(({ user }) => { if (active) setAuthUser(user ?? (standalone ? LOCAL_APP_USER : null)); })
+      .then(({ user }) => { if (active && authRevision.current === revision) setAuthUser(user ?? (standalone ? LOCAL_APP_USER : null)); })
       .catch(() => undefined)
       .finally(() => { if (active) setAuthLoading(false); });
     return () => { active = false; };
   }, [standalone]);
 
   const handleSignedIn = useCallback((user: AuthUser) => {
+    ++authRevision.current;
     setAuthUser(user);
     setAuthLoading(false);
   }, []);
@@ -1310,6 +1331,7 @@ export default function Home({ standalone = false }: { standalone?: boolean } = 
   }
 
   async function signOut() {
+    ++authRevision.current;
     uploadController.current?.abort();
     metadataController.current?.abort();
     queuedPlayback.current = null;
@@ -1322,13 +1344,14 @@ export default function Home({ standalone = false }: { standalone?: boolean } = 
     previewUrls.current.forEach((url) => URL.revokeObjectURL(url));
     previewUrls.current.clear();
     await fetch('/api/auth/me', { method: 'DELETE' }).catch(() => undefined);
-    if (isGithubPagesApp()) {
+    await window.hearuGoogleSignOut?.();
+    if (isGithubPagesApp() && !standalone) {
       window.location.replace(new URL('/HearU/', window.location.origin));
       return;
     }
     sessionStorage.removeItem('hearu-session');
     window.history.replaceState(null, '', window.location.pathname);
-    setInviteCode(''); setRoomNotice(''); setSession(null); setPayload(null); setSelected([]); setAccountOpen(false); setScreen('home'); setAuthUser(null);
+    setInviteCode(''); setRoomNotice(''); setSession(null); setPayload(null); setSelected([]); setAccountOpen(false); setScreen('home'); setAuthUser(standalone ? LOCAL_APP_USER : null);
     setLocalPlayerOpen(false); setLocalTrackIndex(0); setLocalPosition(0); setLocalDuration(0); setLocalIsPlaying(false); setLocalPlayRequest(0);
     setScanning(false); setScanMessage(''); autoScanAttempted.current = false;
   }
@@ -1475,7 +1498,7 @@ export default function Home({ standalone = false }: { standalone?: boolean } = 
   return (
     <AppSurface standalone={standalone} overlays={<>
       {joinOpen && <JoinOverlay defaultName={authUser.name.split(' ')[0]} initialCode={inviteCode} close={() => setJoinOpen(false)} join={joinRoom} />}
-      {accountOpen && <AccountOverlay user={authUser} close={() => setAccountOpen(false)} signOut={() => { void signOut(); }} theme={theme} setTheme={setTheme} />}
+      {accountOpen && <AccountOverlay user={authUser} close={() => setAccountOpen(false)} signOut={() => { void signOut(); }} signedIn={handleSignedIn} theme={theme} setTheme={setTheme} />}
     </>}>
         <div className="phone-screen">
           {screen === 'home' && <HomeScreen session={session} user={authUser} goTo={setScreen} openJoin={() => setJoinOpen(true)} openAccount={() => setAccountOpen(true)} />}
