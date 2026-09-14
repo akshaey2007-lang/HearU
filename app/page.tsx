@@ -530,8 +530,8 @@ function AccountOverlay({ user, close, signOut, signedIn, theme, setTheme }: { u
     finally { setBusy(false); }
   }
   return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={close}>
-      <div className="account-modal liquid-card" role="dialog" aria-modal="true" aria-labelledby="account-title" onMouseDown={(event) => event.stopPropagation()}>
+    <div className="modal-backdrop" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) close(); }}>
+      <div className="account-modal liquid-card" role="dialog" aria-modal="true" aria-labelledby="account-title">
         <button className="icon-button close-modal" onClick={close} aria-label="Close"><X /></button>
         <ProfileAvatar user={user} size="lg" />
         <p className="eyebrow">{isWebSession ? (canGoogleSignIn ? 'Local listener' : 'Web session') : 'Google account'}</p><h2 id="account-title">{user.name}</h2><p>{user.email}</p>
@@ -873,9 +873,11 @@ function JoinOverlay({ defaultName, initialCode, close, join }: { defaultName: s
     setBusy(false);
   }
 
+  // Navigation opens this on pointer-up. Ignore compatibility mouse events
+  // from that same touch; only a new outside pointer-down may dismiss it.
   return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={close}>
-      <div className="join-modal liquid-card" role="dialog" aria-modal="true" aria-labelledby="join-title" onMouseDown={(event) => event.stopPropagation()}>
+    <div className="modal-backdrop" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) close(); }}>
+      <div className="join-modal liquid-card" role="dialog" aria-modal="true" aria-labelledby="join-title">
         <button className="icon-button close-modal" onClick={close} aria-label="Close"><X /></button>
         <span className="modal-icon"><Users /></span><p className="eyebrow">Listen together</p><h2 id="join-title">{initialCode ? `Join room ${initialCode}` : 'Join a room'}</h2><p>{initialCode ? 'Your invite is ready. Choose join to start listening.' : 'Enter the code shared by your friend.'}</p>
         <input className="code-input" value={code} onChange={(event) => setCode(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4))} placeholder="8K2P" aria-label="Room code" autoFocus />

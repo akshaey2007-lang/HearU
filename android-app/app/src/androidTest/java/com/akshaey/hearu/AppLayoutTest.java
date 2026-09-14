@@ -122,6 +122,16 @@ public class AppLayoutTest {
         assertFullScreen();
         screenshot("portrait-dark");
 
+        // A real Android tap produces compatibility mouse events after pointer-up.
+        // Those must not dismiss the room dialog opened by the navigation tap.
+        tap("button[aria-label='Room']");
+        waitFor("!!document.querySelector('.join-modal input[aria-label=\"Room code\"]')");
+        SystemClock.sleep(800);
+        assertEquals("Room dialog remains open for a guest", "true", evaluate("!!document.querySelector('.join-modal')"));
+        screenshot("room-code-guest");
+        tap(".join-modal button[aria-label='Close']");
+        waitFor("!document.querySelector('.join-modal')");
+
         tap("button[aria-label='Open account']");
         waitFor("!!document.querySelector('.native-google-button') && typeof HearUNative === 'object'");
         assertTrue("Only the bundled page is trusted", GoogleAuthBridge.trustedPage("https://akshaey2007-lang.github.io/HearU/_android/android.html?room=ABC"));
@@ -140,7 +150,21 @@ public class AppLayoutTest {
         waitFor("!!document.querySelector('.account-modal [role=alert]') && !document.querySelector('.native-google-button').disabled");
         tap("[role='switch']");
         waitFor("document.documentElement.dataset.theme === 'light'");
+        // Supply an account only within instrumentation, exercising the real
+        // signed-in UI without embedding test credentials or bypasses in the APK.
+        evaluate("window.hearuOriginalGoogleSignIn=window.hearuGoogleSignIn;window.hearuGoogleSignIn=async()=>({id:'google-room-test',name:'Room Tester',email:'room@example.test',picture:null});");
+        tap(".native-google-button");
+        waitFor("document.querySelector('.account-modal').textContent.includes('room@example.test')");
+        evaluate("window.hearuGoogleSignIn=window.hearuOriginalGoogleSignIn;");
         tap("button[aria-label='Close']");
+        tap("button[aria-label='Room']");
+        waitFor("!!document.querySelector('.join-modal')");
+        SystemClock.sleep(800);
+        assertEquals("Room dialog remains open after sign-in", "true", evaluate("!!document.querySelector('.join-modal input[aria-label=\"Room code\"]')"));
+        assertEquals("Signed-in listener name is supplied", "true", evaluate("document.querySelector('.join-name-input').value==='Room'"));
+        screenshot("room-code-signed-in");
+        tap(".join-modal button[aria-label='Close']");
+        waitFor("!document.querySelector('.join-modal')");
         assertFullScreen();
         screenshot("portrait-light");
 
