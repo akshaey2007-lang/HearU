@@ -55,14 +55,16 @@ public class AppLayoutTest {
             if ("true".equals(evaluate(expression))) return;
             SystemClock.sleep(150);
         } while (SystemClock.uptimeMillis() < deadline);
+        screenshot("failed-condition");
         fail("Condition did not become true: " + expression);
     }
 
     private void tap(String selector) throws Exception {
         waitFor("!!document.querySelector(" + JSONObject.quote(selector) + ")");
+        evaluate("document.querySelector(" + JSONObject.quote(selector) + ").scrollIntoView({block:'center',behavior:'instant'})");
         awaitPaint();
         String position = evaluate("JSON.stringify((() => { const el=document.querySelector("
-                + JSONObject.quote(selector) + "); el.scrollIntoView({block:'center'});"
+                + JSONObject.quote(selector) + ");"
                 + "const r=el.getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2,w:innerWidth};})())");
         JSONObject point = new JSONObject(new JSONTokener(position).nextValue().toString());
         int[] offset = new int[2];
@@ -150,10 +152,13 @@ public class AppLayoutTest {
         waitFor("!!document.querySelector('.account-modal [role=alert]') && !document.querySelector('.native-google-button').disabled");
         tap("[role='switch']");
         waitFor("document.documentElement.dataset.theme === 'light'");
+        tap("button[aria-label='Close']");
+        tap("button[aria-label='Open account']");
         // Supply an account only within instrumentation, exercising the real
         // signed-in UI without embedding test credentials or bypasses in the APK.
-        evaluate("window.hearuOriginalGoogleSignIn=window.hearuGoogleSignIn;window.hearuGoogleSignIn=async()=>({id:'google-room-test',name:'Room Tester',email:'room@example.test',picture:null});");
+        evaluate("window.hearuOriginalGoogleSignIn=window.hearuGoogleSignIn;window.hearuMockSignInCalled=false;window.hearuGoogleSignIn=async()=>{window.hearuMockSignInCalled=true;return {id:'google-room-test',name:'Room Tester',email:'room@example.test',picture:null};};");
         tap(".native-google-button");
+        waitFor("window.hearuMockSignInCalled===true");
         waitFor("document.querySelector('.account-modal').textContent.includes('room@example.test')");
         evaluate("window.hearuGoogleSignIn=window.hearuOriginalGoogleSignIn;");
         tap("button[aria-label='Close']");
