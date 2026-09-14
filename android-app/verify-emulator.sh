@@ -46,8 +46,10 @@ if [[ "$booted" != "true" ]]; then cat "$RUNNER_TEMP/hearu-emulator.log"; exit 1
 "$adb" install -r android-app/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
 
 # The interface and local player must work on first launch without internet.
+"$adb" shell cmd connectivity airplane-mode enable
 "$adb" shell svc wifi disable
 "$adb" shell svc data disable
+"$adb" shell cmd connectivity airplane-mode | tr -d '\r' | grep -qx 'enabled'
 "$adb" logcat -c
 "$adb" logcat -v threadtime > android-verification/logcat.txt 2>&1 &
 logcat_pid=$!
